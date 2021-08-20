@@ -38,31 +38,21 @@
 
 #include "cgroup_v2.h"
 
-#define SLURMD_CGDIR "/system"
-#define JOBS_CGDIR "/jobs"
+#define SLURMD_CGDIR "system"
+#define JOBS_CGDIR "jobs" /* We want jobs at the same level than system */
 
 const char plugin_name[] = "Cgroup v2 plugin";
 const char plugin_type[] = "cgroup/v2";
 const uint32_t plugin_version = SLURM_VERSION_NUMBER;
 
-static xcgroup_ns_t g_cg_ns;
-
 /* Internal cgroup structs */
-static xcgroup_t int_cg[CG_CTL_CNT][CG_LEVEL_CNT];
-
-/* Pending to convert into an array */
-static xcgroup_t g_root_cg;
-static xcgroup_t g_job_cg;
-static xcgroup_t g_step_cg;
-static xcgroup_t g_step_user_cg;
-static xcgroup_t g_step_slurm_cg;
-static xcgroup_t g_sys_cg;
-
+static uint16_t step_active_cnt;
+static xcgroup_ns_t int_cg_ns;
+static xcgroup_t int_cg[CG_LEVEL_CNT];
 static cgroup_oom_t *g_oom_step_results = NULL;
-
-static bool avail_controllers[CG_CTL_CNT];
-static bool enabled_controllers[CG_CTL_CNT];
-const char *g_ctl_name[CG_CTL_CNT] = {
+static bitstr_t *avail_controllers = NULL;
+static bitstr_t *enabled_controllers = NULL;
+const char *ctl_names[CG_CTL_CNT] = {
 	"",
 	"cpuset",
 	"memory",
@@ -71,37 +61,46 @@ const char *g_ctl_name[CG_CTL_CNT] = {
 };
 
 
-/* Hierarchy is like this:
-                              root(delegated)
-			       /             \
-			      /               \
-                          system               job_x
-                     (slurmd/stepds)          /
-		                          step_0 ... step_n
-                                          /   \
-                            user_processes     slurm_processes
-				    /   \     (stepds)
-				   /     \
-                              no_task  task_0...task_n
-                                 (user pids)
+/* Hierarchy will take this form:
+ *
+ * FIXME: We dont use CG_LEVEL_USER, but we do always use CG_LEVEL_STEP_USER
+ *        can we simplify make it work fine???
+ *
+ *
+ *                              root(delegated)
+ *			       /	      \
+ *			      /		       \
+ *                         system               jobs (FIXME: do we remove it?)
+ *                        (slurmd)               |
+ *                                           job_x ... job_n
+ *                                            |
+ *		                          step_0 ... step_n
+ *                                         /   \
+ *                           user_processes     slurm_processes
+ *				    /   \           (stepds (constrained if
+ *				   /	 \                   CoreSpec/MemSpec))
+ *                             no_task  task_0...task_n
+ *                                (user pids)
  */
 
 /*
+ * Fill up the internal cgroup namespace object. This mainly contains the path
+ * to the root.
+ *
  * The cgroup v2 documented way to know which is the process root in the cgroup
- * hierarchy, is just to read /proc/self/cgroup. In Unified hierarchies this
+ * hierarchy is just to read /proc/self/cgroup. In Unified hierarchies this
  * must contain only one line. If there are more lines this would mean we are
  * in Hybrid or in Legacy cgroup.
  */
-static void _set_g_cg_ns()
+static void _set_int_cg_ns()
 {
 	char *buf, *start = NULL, *p;
 	size_t sz;
-	int fs;
 	struct stat st;
 
-	fs = common_file_read_content("/proc/self/cgroup", &buf, &sz);
-	if (fs != SLURM_SUCCESS)
-		debug2("cannot read /proc/self/cgroup contents: %m");
+	if (common_file_read_content("/proc/self/cgroup", &buf, &sz)
+	    != SLURM_SUCCESS)
+		fatal("cannot read /proc/self/cgroup contents: %m");
 
 	/*
 	 * In Unified mode there will be just one line containing the path
@@ -124,21 +123,21 @@ static void _set_g_cg_ns()
 		if ((p = xstrchr(start, '\n')))
 			*p = '\0';
 		/*
-		 * Note: if we are slurmstepd, we'll be already in /system
+		 * Note: if we are slurmstepd, we'll be initially in /system
 		 * because we've been initiated by slurmd. So strip the last
 		 * directory in that case.
 		 */
 		if (running_in_slurmstepd()) {
-			if (xstrcasecmp(xbasename(start), "system"))
+			if (xstrcasecmp(xbasename(start), SLURMD_CGDIR))
 				goto err;
 			p = xstrrchr(start, '/');
 			*p = '\0';
 		}
-		xstrfmtcat(g_cg_ns.mnt_point, "/sys/fs/cgroup%s", start);
-		if (stat(g_cg_ns.mnt_point, &st) < 0) {
+		xstrfmtcat(int_cg_ns.mnt_point, "/sys/fs/cgroup%s", start);
+		if (stat(int_cg_ns.mnt_point, &st) < 0) {
 			error("cannot read cgroup path %s: %m",
-			      g_cg_ns.mnt_point);
-			xfree(g_cg_ns.mnt_point);
+			      int_cg_ns.mnt_point);
+			xfree(int_cg_ns.mnt_point);
 		}
 	}
 err:
@@ -161,22 +160,22 @@ static int _enable_subtree_control(const char *path)
 	parent->path = xstrdup(path);
 
 	for (i = 0; i < CG_CTL_CNT; i++) {
-		if (avail_controllers[i]) {
-			xstrfmtcat(param, "+%s", g_ctl_name[i]);
+		if (bit_test(avail_controllers, i)) {
+			xstrfmtcat(param, "+%s", ctl_names[i]);
 			rc = common_cgroup_set_param(parent,
 						     "cgroup.subtree_control",
 						     param);
 			xfree(param);
 			if (rc != SLURM_SUCCESS) {
 				error("Cannot enable %s in %s/cgroup.subtree_control",
-				      g_ctl_name[i], path);
-				avail_controllers[i] = false;
+				      ctl_names[i], path);
+				bit_clear(avail_controllers, i);
 				rc = SLURM_ERROR;
 			}
 			else {
 				debug("Enabled %s controller in %s",
-				      g_ctl_name[i], path);
-				enabled_controllers[i] = true;
+				      ctl_names[i], path);
+				bit_set(enabled_controllers, i);
 			}
 		}
 	}
@@ -193,29 +192,28 @@ static int _check_avail_controllers()
 {
 	char *buf, *ptr, *save_ptr, *ctl_filepath = NULL;
 	size_t sz;
-	int fs;
 
-	xstrfmtcat(ctl_filepath, "%s/cgroup.controllers", g_cg_ns.mnt_point);
-	fs = common_file_read_content(ctl_filepath, &buf, &sz);
-	if (fs != SLURM_SUCCESS || !buf) {
+	xstrfmtcat(ctl_filepath, "%s/cgroup.controllers", int_cg_ns.mnt_point);
+	if (common_file_read_content(ctl_filepath, &buf, &sz)
+	    != SLURM_SUCCESS || !buf) {
 		error("cannot read %s: %m", ctl_filepath);
-		return fs;
+		return SLURM_ERROR;
 	}
 
 	ptr = strtok_r(buf, " ", &save_ptr);
 	while (ptr) {
-		if (!xstrcasecmp("cpuset", ptr))
-			avail_controllers[CG_CPUS] = true;
-		else if (!xstrcasecmp("cpu", ptr))
-			avail_controllers[CG_CPUACCT] = true;
-		else if (!xstrcasecmp("memory", ptr))
-			avail_controllers[CG_MEMORY] = true;
+		for (int i = 0; i < CG_CTL_CNT; i++) {
+			if (!xstrcmp(ctl_names[i], ""))
+				continue;
+			if (!xstrcasecmp(ctl_names[i], ptr))
+				bit_set(avail_controllers, i);
+		}
 		ptr = strtok_r(NULL, " ", &save_ptr);
 	}
 	xfree(buf);
 
 	/* Field not used in v2 */
-	g_cg_ns.subsystems = NULL;
+	int_cg_ns.subsystems = NULL;
 
 	return SLURM_SUCCESS;
 }
@@ -226,17 +224,21 @@ static void _record_oom_step_stats()
 	size_t sz;
 	uint64_t job_kills, step_kills, job_swkills, step_swkills;
 
-	if (!avail_controllers[CG_MEMORY])
+	if (!bit_test(avail_controllers, CG_MEMORY))
 		return;
 
 	/* Get latest stats for the step */
-	if (common_cgroup_get_param(&g_step_user_cg, "memory.events",
+	if (common_cgroup_get_param(&int_cg[CG_LEVEL_STEP_USER],
+				    "memory.events",
 				    &mem_events, &sz) != SLURM_SUCCESS)
-		error("Cannot read %s/memory.events", g_step_user_cg.path);
+		error("Cannot read %s/memory.events",
+		      int_cg[CG_LEVEL_STEP_USER].path);
 
-	if (common_cgroup_get_param(&g_step_user_cg, "memory.swap.events",
+	if (common_cgroup_get_param(&int_cg[CG_LEVEL_STEP_USER],
+				    "memory.swap.events",
 				    &mem_swap_events, &sz) != SLURM_SUCCESS)
-		error("Cannot read %s/memory.swap.events", g_step_user_cg.path);
+		error("Cannot read %s/memory.swap.events",
+		      int_cg[CG_LEVEL_STEP_USER].path);
 
 	if (mem_events != NULL) {
 		if ((ptr = strstr(mem_events, "oom_kill"))) {
@@ -253,13 +255,16 @@ static void _record_oom_step_stats()
 	}
 
 	/* Get stats for the job */
-	if (common_cgroup_get_param(&g_job_cg, "memory.events", &mem_events,
-				    &sz) != SLURM_SUCCESS)
-		error("Cannot read %s/memory.events", g_step_user_cg.path);
+	if (common_cgroup_get_param(&int_cg[CG_LEVEL_JOB],
+				    "memory.events",
+				    &mem_events, &sz) != SLURM_SUCCESS)
+		error("Cannot read %s/memory.events",
+		      int_cg[CG_LEVEL_STEP_USER].path);
 
-	if (common_cgroup_get_param(&g_job_cg, "memory.swap.events",
+	if (common_cgroup_get_param(&int_cg[CG_LEVEL_JOB], "memory.swap.events",
 				    &mem_swap_events, &sz) != SLURM_SUCCESS)
-		error("Cannot read %s/memory.swap.events", g_step_user_cg.path);
+		error("Cannot read %s/memory.swap.events",
+		      int_cg[CG_LEVEL_STEP_USER].path);
 
 
 	if (mem_events != NULL) {
@@ -302,26 +307,35 @@ static void _record_oom_step_stats()
  */
 extern int init(void)
 {
+	char *slurmd_cgdir = "/" SLURMD_CGDIR;
+	char *jobs_cgdir = "/" JOBS_CGDIR;
+
+	avail_controllers = bit_alloc(CG_CTL_CNT);
+	enabled_controllers = bit_alloc(CG_CTL_CNT);
+	step_active_cnt = 0;
+
 	/*
 	 * Check our current root dir. Systemd MUST have Delegated it to us,
 	 * so we want slurmd to be started by systemd
 	 */
-	_set_g_cg_ns();
-	if (g_cg_ns.mnt_point == NULL)
+	_set_int_cg_ns();
+	if (int_cg_ns.mnt_point == NULL) {
+		error("Cannot setup the cgroup namespace.");
 		return SLURM_ERROR;
+	}
 
 	/* Check available controllers in cgroup.controller and enable them. */
 	if (_check_avail_controllers() != SLURM_SUCCESS)
 		return SLURM_ERROR;
 
 	/*
-	 * Setup the paths for system (where slurmd will reside) and slurm
-	 * (where jobs will reside).
+	 * Setup the paths for daemons (where slurmd will live) and for the
+	 * jobs (where user processes and stepds will live).
 	 */
-	common_cgroup_create(&g_cg_ns, &g_sys_cg, SLURMD_CGDIR, (uid_t) 0,
-			     (gid_t) 0);
-	common_cgroup_create(&g_cg_ns, &g_root_cg, JOBS_CGDIR, (uid_t) 0,
-			     (gid_t) 0);
+	common_cgroup_create(&int_cg_ns, &int_cg[CG_LEVEL_SYSTEM],
+			     slurmd_cgdir, (uid_t) 0, (gid_t) 0);
+	common_cgroup_create(&int_cg_ns, &int_cg[CG_LEVEL_ROOT],
+			     jobs_cgdir, (uid_t) 0, (gid_t) 0);
 
 	if (!running_in_slurmd())
 		goto init_end;
@@ -331,13 +345,13 @@ extern int init(void)
 	 * the process which systemd started (slurmd) to a leaf and prepare the
 	 * system for initializing stepds.
 	 */
-	common_cgroup_instantiate(&g_sys_cg);
-	common_cgroup_move_process(&g_sys_cg, getpid());
-	common_cgroup_instantiate(&g_root_cg);
+	common_cgroup_instantiate(&int_cg[CG_LEVEL_SYSTEM]);
+	common_cgroup_move_process(&int_cg[CG_LEVEL_SYSTEM], getpid());
+	common_cgroup_instantiate(&int_cg[CG_LEVEL_ROOT]);
 
-	if (_enable_subtree_control(g_cg_ns.mnt_point) != SLURM_SUCCESS) {
-		error("Cannot enable subtree_control at the top cg level %s",
-		      g_cg_ns.mnt_point);
+	if (_enable_subtree_control(int_cg_ns.mnt_point) != SLURM_SUCCESS) {
+		error("Cannot enable subtree_control at the top level %s",
+		      int_cg_ns.mnt_point);
 		return SLURM_ERROR;
 	}
 
@@ -345,12 +359,12 @@ extern int init(void)
 	 * Now we should have controllers available in the root, enable them
 	 * for future childs.
 	 */
-	_enable_subtree_control(g_root_cg.path);
+	_enable_subtree_control(int_cg[CG_LEVEL_ROOT].path);
 
 	/*
 	 * We are ready now to start job steps, which will be created under
-	 * g_sys_cg.path/slurmd. Per each new step we'll need to first move it
-	 * out of slurmd directory.
+	 * int_cg[CG_LEVEL_ROOT].path/job_x/step_x. Per each new step we'll need
+	 * to first move the stepd process out of slurmd directory.
 	 */
 init_end:
 	debug("%s loaded", plugin_name);
@@ -364,9 +378,12 @@ extern int fini(void)
 	 * we may not be stopping yet. When the process terminates systemd will
 	 * remove the directories.
 	 */
-	common_cgroup_ns_destroy(&g_cg_ns);
-	common_cgroup_destroy(&g_sys_cg);
-	common_cgroup_destroy(&g_root_cg);
+	common_cgroup_ns_destroy(&int_cg_ns);
+	common_cgroup_destroy(&int_cg[CG_LEVEL_SYSTEM]);
+	common_cgroup_destroy(&int_cg[CG_LEVEL_ROOT]);
+
+	bit_free(avail_controllers);
+	bit_free(enabled_controllers);
 
 	debug("unloading %s", plugin_name);
 	return SLURM_SUCCESS;
@@ -376,13 +393,13 @@ extern int fini(void)
  * Unlike in Legacy mode (v1) where we needed to create a directory for each
  * controller, in Unified mode this function will be mostly empty because the
  * hierarchy is unified into the same path. The controllers will be enabled
- * when we create the hierarchy. The only controller that may need an init. is
+ * when we create the hierarchy. The only controller that may need an init is
  * the 'devices', which in Unified is not a real controller, but instead we
  * need to register an eBPF program.
  */
-extern int cgroup_p_initialize(cgroup_ctl_type_t sub)
+extern int cgroup_p_initialize(cgroup_ctl_type_t ctl)
 {
-	switch(sub) {
+	switch(ctl) {
 	case CG_DEVICES:
 		/* initialize_and_set_ebpf_program() */
 		break;
@@ -396,104 +413,110 @@ extern int cgroup_p_initialize(cgroup_ctl_type_t sub)
  * As part of the initialization, the slurmd directory is already created, so
  * this function will remain empty.
  */
-extern int cgroup_p_system_create(cgroup_ctl_type_t sub)
+extern int cgroup_p_system_create(cgroup_ctl_type_t ctl)
 {
 	return SLURM_SUCCESS;
 }
 
 /*
- * As part of the initialization, the slurmd directory is already created, so
- * this function will remain empty.
+ * Note that as part of the initialization, the slurmd pid is already put
+ * inside this cgroup but we still need to implement this for if somebody
+ * needs to add a different pid in this cgroup.
  */
-extern int cgroup_p_system_addto(cgroup_ctl_type_t sub, pid_t *pids, int npids)
+extern int cgroup_p_system_addto(cgroup_ctl_type_t ctl, pid_t *pids, int npids)
 {
-	return SLURM_SUCCESS;
+	return common_cgroup_add_pids(&int_cg[CG_LEVEL_SYSTEM], pids, npids);
 }
 
 /*
  * There's no need to do any cleanup, when systemd terminates the cgroup is
  * automatically removed by systemd.
  */
-extern int cgroup_p_system_destroy(cgroup_ctl_type_t sub)
+extern int cgroup_p_system_destroy(cgroup_ctl_type_t ctl)
 {
 	return SLURM_SUCCESS;
 }
 
 /*
  * Create the step hierarchy and move the stepd process into it. Further forked
- * processes will be created in the step directory already. We need to respect
+ * processes will be created in the step directory as child. We need to respect
  * the Top-Down constraint not adding pids to non-leaf cgroups.
  */
-extern int cgroup_p_step_create(cgroup_ctl_type_t sub, stepd_step_rec_t *job)
+extern int cgroup_p_step_create(cgroup_ctl_type_t ctl, stepd_step_rec_t *job)
 {
-	/* PSEUDO_CODE:
+	/* FIXME: At every SLURM_ERROR we need to do cleanup.
 	 *
-	 * We need an extra two directories per each step:
+	 * We need two directories per each step:
 	 *  step_x/slurm
 	 *  step_x/user
 	 *
-	 * And we then need to put the stepd into slurm/ because:
+	 * because we need to put the stepd into its specific slurm/ dir,
+	 * otherwise suspending/constraining the user cgroup would also suspend
+	 * or constrain the stepd.
 	 *
-	 * we do not put it in the step container because this
-	 * container could be used to suspend/resume tasks using freezer
-	 * properties so we need to let the slurmstepd outside of
-	 * this one)
+	 * Note, CoreSpec and/or MemSpec does not affect slurmstepd anymore.
 	 */
 	int rc = SLURM_SUCCESS;
 	char *new_path = NULL;
 	char tmp_char[64];
 
+	/* Don't let other plugins destroy our structs. */
+	step_active_cnt++;
+
 	/* Job cgroup */
-	xstrfmtcat(new_path, "%s/job_%u", g_root_cg.name, job->step_id.job_id);
-	if (common_cgroup_create(&g_cg_ns, &g_job_cg, new_path, 0, 0) !=
-	    SLURM_SUCCESS) {
+	xstrfmtcat(new_path, "%s/job_%u", int_cg[CG_LEVEL_ROOT].name,
+		   job->step_id.job_id);
+	if (common_cgroup_create(&int_cg_ns, &int_cg[CG_LEVEL_JOB],
+				 new_path, 0, 0) != SLURM_SUCCESS) {
 		error("unable to create job %u cgroup", job->step_id.job_id);
 		rc = SLURM_ERROR;
 		goto endit;
 	}
-	if (common_cgroup_instantiate(&g_job_cg) != SLURM_SUCCESS) {
-		common_cgroup_destroy(&g_job_cg);
+	if (common_cgroup_instantiate(&int_cg[CG_LEVEL_JOB]) != SLURM_SUCCESS) {
+		common_cgroup_destroy(&int_cg[CG_LEVEL_JOB]);
 		error("unable to instantiate job %u cgroup",
 		      job->step_id.job_id);
 		rc = SLURM_ERROR;
 		goto endit;
 	}
 	xfree(new_path);
-	_enable_subtree_control(g_job_cg.path);
+	_enable_subtree_control(int_cg[CG_LEVEL_JOB].path);
 
 	/* Step cgroup */
-	xstrfmtcat(new_path, "%s/step_%s", g_job_cg.name,
+	xstrfmtcat(new_path, "%s/step_%s", int_cg[CG_LEVEL_JOB].name,
 		   log_build_step_id_str(&job->step_id, tmp_char,
 					 sizeof(tmp_char),
 					 STEP_ID_FLAG_NO_PREFIX |
 					 STEP_ID_FLAG_NO_JOB));
 
-	if (common_cgroup_create(&g_cg_ns, &g_step_cg, new_path, 0, 0) !=
-	    SLURM_SUCCESS) {
+	if (common_cgroup_create(&int_cg_ns, &int_cg[CG_LEVEL_STEP],
+				 new_path, 0, 0) != SLURM_SUCCESS) {
 		error("unable to create step %ps cgroup", &job->step_id);
 		rc = SLURM_ERROR;
 		goto endit;
 	}
-	if (common_cgroup_instantiate(&g_step_cg) != SLURM_SUCCESS) {
-		common_cgroup_destroy(&g_step_cg);
+	if (common_cgroup_instantiate(&int_cg[CG_LEVEL_STEP])
+	    != SLURM_SUCCESS) {
+		common_cgroup_destroy(&int_cg[CG_LEVEL_STEP]);
 		error("unable to instantiate step %ps cgroup", &job->step_id);
 		rc = SLURM_ERROR;
 		goto endit;
 	}
 	xfree(new_path);
-	_enable_subtree_control(g_step_cg.path);
+	_enable_subtree_control(int_cg[CG_LEVEL_STEP].path);
 
 	/* Step User processes cgroup */
-	xstrfmtcat(new_path, "%s/user", g_step_cg.name);
-	if (common_cgroup_create(&g_cg_ns, &g_step_user_cg, new_path, 0, 0) !=
-	    SLURM_SUCCESS) {
+	xstrfmtcat(new_path, "%s/user", int_cg[CG_LEVEL_STEP].name);
+	if (common_cgroup_create(&int_cg_ns, &int_cg[CG_LEVEL_STEP_USER],
+				 new_path, 0, 0) != SLURM_SUCCESS) {
 		error("unable to create step %ps user procs cgroup",
 		      &job->step_id);
 		rc = SLURM_ERROR;
 		goto endit;
 	}
-	if (common_cgroup_instantiate(&g_step_user_cg) != SLURM_SUCCESS) {
-		common_cgroup_destroy(&g_step_user_cg);
+	if (common_cgroup_instantiate(&int_cg[CG_LEVEL_STEP_USER])
+	    != SLURM_SUCCESS) {
+		common_cgroup_destroy(&int_cg[CG_LEVEL_STEP_USER]);
 		error("unable to instantiate step %ps user procs cgroup",
 		      &job->step_id);
 		rc = SLURM_ERROR;
@@ -502,16 +525,17 @@ extern int cgroup_p_step_create(cgroup_ctl_type_t sub, stepd_step_rec_t *job)
 	xfree(new_path);
 
 	/* Step Slurm processes cgroup */
-	xstrfmtcat(new_path, "%s/slurm", g_step_cg.name);
-	if (common_cgroup_create(&g_cg_ns, &g_step_slurm_cg, new_path, 0, 0) !=
-	    SLURM_SUCCESS) {
+	xstrfmtcat(new_path, "%s/slurm", int_cg[CG_LEVEL_STEP].name);
+	if (common_cgroup_create(&int_cg_ns, &int_cg[CG_LEVEL_STEP_SLURM],
+				 new_path, 0, 0) != SLURM_SUCCESS) {
 		error("unable to create step %ps slurm procs cgroup",
 		      &job->step_id);
 		rc = SLURM_ERROR;
 		goto endit;
 	}
-	if (common_cgroup_instantiate(&g_step_slurm_cg) != SLURM_SUCCESS) {
-		common_cgroup_destroy(&g_step_slurm_cg);
+	if (common_cgroup_instantiate(&int_cg[CG_LEVEL_STEP_SLURM])
+	    != SLURM_SUCCESS) {
+		common_cgroup_destroy(&int_cg[CG_LEVEL_STEP_SLURM]);
 		error("unable to instantiate step %ps slurm procs cgroup",
 		      &job->step_id);
 		rc = SLURM_ERROR;
@@ -523,14 +547,17 @@ extern int cgroup_p_step_create(cgroup_ctl_type_t sub, stepd_step_rec_t *job)
 	 * We need to remove this stepd from the user processes because limits
 	 * or freeze operations could affect and deadlock stepd.
 	 */
-	if (common_cgroup_move_process(&g_step_slurm_cg, job->jmgr_pid) !=
-	    SLURM_SUCCESS) {
+	if (common_cgroup_move_process(&int_cg[CG_LEVEL_STEP_SLURM],
+				       job->jmgr_pid) != SLURM_SUCCESS) {
 		error("unable to move stepd pid to its dedicated cgroup");
 		rc = SLURM_ERROR;
 	}
+
 	/* Do use slurmstepd pid as the identifier of the container */
 	job->cont_id = (uint64_t)job->jmgr_pid;
 endit:
+	if (rc != SLURM_SUCCESS)
+		step_active_cnt--;
 	return rc;
 }
 
@@ -543,15 +570,16 @@ endit:
  *
  * Read cgroup v2 documentation for more info.
  */
-extern int cgroup_p_step_addto(cgroup_ctl_type_t sub, pid_t *pids, int npids)
+extern int cgroup_p_step_addto(cgroup_ctl_type_t ctl, pid_t *pids, int npids)
 {
 	int i, j, rc;
 	pid_t *user_pids = xmalloc(sizeof(*user_pids) * npids);
 	pid_t stepd_pid = getpid();
 
 	/*
-	 * Remove our stepd pid from the list, we want it always in the slurm
-	 * processes's dedicated cgroup and not in the step user's cgroup.
+	 * Protect against moving the stepd pid to the user directory.
+	 * We want it always in the slurm rocesses's dedicated cgroup and not in
+	 * the step user's cgroup.
 	 */
 	for (i = 0, j = 0; i < npids; i++)
 		if (pids[i] != stepd_pid) {
@@ -559,7 +587,7 @@ extern int cgroup_p_step_addto(cgroup_ctl_type_t sub, pid_t *pids, int npids)
 			j++;
 		}
 
-	rc = common_cgroup_add_pids(&g_step_user_cg, user_pids, j);
+	rc = common_cgroup_add_pids(&int_cg[CG_LEVEL_STEP_USER], user_pids, j);
 
 	xfree(user_pids);
 	return rc;
@@ -577,19 +605,24 @@ extern int cgroup_p_step_get_pids(pid_t **pids, int *npids)
 
 	/*
 	 * DEV_NOTES:
-	 *  We may want to determine if there are any task_X directory and if so
-	 *  read the processes inside them instead of reading the step ones only.
+	 * We may want to determine if there are any task_X directories and if
+	 * so read the processes inside them instead of reading the step ones
+	 * only.
 	 *
-	 *  We are including also the slurmstepd pids here at the moment.
+	 * We are including also the slurmstepd pids here at the moment.
 	 *
-	 *  if there are task_x directories, then:
-	 *     for all task_x dir:
-         *         read task_x/cgroup.procs and put them into **pids
-	 *  else:
-         *      read step_x/cgroup.procs and put them into **pids
+	 * if there are task_x directories, then:
+	 *    for all task_x dir:
+         *        read task_x/cgroup.procs and put them into **pids
+	 * else:
+         *     read step_x/cgroup.procs and put them into **pids
 	 */
-	common_cgroup_get_pids(&g_step_slurm_cg, &pids_slurm, &npids_slurm);
-	common_cgroup_get_pids(&g_step_user_cg, &pids_user, &npids_user);
+	common_cgroup_get_pids(&int_cg[CG_LEVEL_STEP_SLURM],
+			       &pids_slurm, &npids_slurm);
+
+	common_cgroup_get_pids(&int_cg[CG_LEVEL_STEP_USER],
+			       &pids_user, &npids_user);
+
 	*npids = npids_slurm + npids_user;
 
 	if ((npids_slurm + npids_user) <= 0)
@@ -614,7 +647,7 @@ extern int cgroup_p_step_get_pids(pid_t **pids, int *npids)
 extern int cgroup_p_step_suspend()
 {
 	/* Another plugin already requesed termination */
-	if (g_step_user_cg.path == NULL)
+	if (int_cg[CG_LEVEL_STEP_USER].path == NULL)
 		return SLURM_SUCCESS;
 
 	/*
@@ -622,37 +655,48 @@ extern int cgroup_p_step_suspend()
 	 * completed, the “frozen” value in the cgroup.events control file will
 	 * be updated to “1” and the corresponding notification will be issued.
 	 */
-	return common_cgroup_set_param(&g_step_user_cg, "cgroup.freeze", "1");
+	return common_cgroup_set_param(&int_cg[CG_LEVEL_STEP_USER],
+				       "cgroup.freeze", "1");
 }
 
 extern int cgroup_p_step_resume()
 {
 	/* Another plugin already requesed termination */
-	if (g_step_user_cg.path == NULL)
+	if (int_cg[CG_LEVEL_STEP_USER].path == NULL)
 		return SLURM_SUCCESS;
 
-	return common_cgroup_set_param(&g_step_user_cg, "cgroup.freeze", "0");
+	return common_cgroup_set_param(&int_cg[CG_LEVEL_STEP_USER],
+				       "cgroup.freeze", "0");
 }
 
 /* FIXME: Need to take into account tasks when accounting is supported */
-extern int cgroup_p_step_destroy(cgroup_ctl_type_t sub)
+extern int cgroup_p_step_destroy(cgroup_ctl_type_t ctl)
 {
 	int rc = SLURM_SUCCESS;
 	xcgroup_t init_root;
 
 	/*
-	 * Multiple plugins can ask us to destroy the step. If we have
-	 * destroyed it before, just leave.
+	 * Only destroy the step if we're the only ones using it. Log it unless
+	 * loaded from slurmd, where we will not create any step but call fini.
 	 */
-	if (!g_step_slurm_cg.path)
-		return rc;
+	if (step_active_cnt == 0) {
+		error("called without a previous init. This shouldn't happen!");
+		return SLURM_SUCCESS;
+	}
+	/* Only destroy the step if we're the only ones using it. */
+	if (step_active_cnt > 1) {
+		step_active_cnt--;
+		log_flag(CGROUP, "Not destroying %s step dir, resource busy by %d other plugin",
+			 ctl_names[ctl], step_active_cnt);
+		return SLURM_SUCCESS;
+	}
 
 	/* We need to record the oom stats prior to remove the cgroup. */
 	_record_oom_step_stats();
 
 	/*
-	 * Move ourselves to the init root
-	 * Create a fake cgroup to call the move process function.
+	 * Move ourselves to the init root. This is the only cgroup level where
+	 * pids can be put and which is not a leaf.
 	 */
 	init_root.ns = NULL;
 	init_root.name = NULL;
@@ -667,36 +711,40 @@ extern int cgroup_p_step_destroy(cgroup_ctl_type_t sub)
 	}
 
 	/* Rmdir this job's stepd cgroup */
-	if ((rc = common_cgroup_delete(&g_step_slurm_cg)) != SLURM_SUCCESS) {
+	if ((rc = common_cgroup_delete(&int_cg[CG_LEVEL_STEP_SLURM]))
+	    != SLURM_SUCCESS) {
 		debug2("unable to remove slurm's step cgroup (%s): %m",
-		       g_step_slurm_cg.path);
+		       int_cg[CG_LEVEL_STEP_SLURM].path);
 		goto end;
 	}
-	common_cgroup_destroy(&g_step_slurm_cg);
+	common_cgroup_destroy(&int_cg[CG_LEVEL_STEP_SLURM]);
 
 	/* Rmdir this job's user processes cgroup */
-	if ((rc = common_cgroup_delete(&g_step_user_cg)) != SLURM_SUCCESS) {
+	if ((rc = common_cgroup_delete(&int_cg[CG_LEVEL_STEP_USER]))
+	    != SLURM_SUCCESS) {
 		debug2("unable to remove user's step cgroup (%s): %m",
-		       g_step_user_cg.path);
+		       int_cg[CG_LEVEL_STEP_USER].path);
 		goto end;
 	}
-	common_cgroup_destroy(&g_step_user_cg);
+	common_cgroup_destroy(&int_cg[CG_LEVEL_STEP_USER]);
 
 	/* Rmdir this step's processes cgroup */
-	if ((rc = common_cgroup_delete(&g_step_cg)) != SLURM_SUCCESS) {
+	if ((rc = common_cgroup_delete(&int_cg[CG_LEVEL_STEP]))
+	    != SLURM_SUCCESS) {
 		debug2("unable to remove step cgroup (%s): %m",
-		       g_step_cg.path);
+		       int_cg[CG_LEVEL_STEP].path);
 		goto end;
 	}
-	common_cgroup_destroy(&g_step_cg);
+	common_cgroup_destroy(&int_cg[CG_LEVEL_STEP]);
 
 	/* That's a try to rmdir if no more steps are in this job */
-	if ((rc = common_cgroup_delete(&g_job_cg)) != SLURM_SUCCESS) {
+	if ((rc = common_cgroup_delete(&int_cg[CG_LEVEL_JOB]))
+	    != SLURM_SUCCESS) {
 		debug2("unable to remove job's step cgroup (%s): %m",
-		       g_job_cg.path);
+		       int_cg[CG_LEVEL_JOB].path);
 		goto end;
 	}
-	common_cgroup_destroy(&g_job_cg);
+	common_cgroup_destroy(&int_cg[CG_LEVEL_JOB]);
 
 end:
 	common_cgroup_destroy(&init_root);
@@ -716,7 +764,8 @@ extern bool cgroup_p_has_pid(pid_t pid)
 	pid_t *pids_user = NULL;
 	int npids_user, i;
 
-	common_cgroup_get_pids(&g_step_user_cg, &pids_user, &npids_user);
+	common_cgroup_get_pids(&int_cg[CG_LEVEL_STEP_USER],
+			       &pids_user, &npids_user);
 	for (i = 0; i < npids_user; i++)
 		if (pids_user[i] == pid)
 			return true;
@@ -725,24 +774,138 @@ extern bool cgroup_p_has_pid(pid_t pid)
 	return false;
 }
 
-extern cgroup_limits_t *cgroup_p_root_constrain_get(cgroup_ctl_type_t sub)
+extern int cgroup_p_constrain_set(cgroup_ctl_type_t ctl, cgroup_level_t level,
+				  cgroup_limits_t *limits)
 {
- 	int rc = SLURM_SUCCESS;
-	cgroup_limits_t *limits = xmalloc(sizeof(*limits));
+	int rc = SLURM_SUCCESS;
 
-	switch (sub) {
+	/* We have no such level in cgroup/v2 hierarchy. */
+	if (level == CG_LEVEL_USER)
+		return SLURM_SUCCESS;
+
+	/* DEV_NOTES - EXPERIMENTAL
+	 * There's no kmem constrain support currently in v2.
+	 * Memory limits have changed to high, low, min, max.
+	 * Swap limits are controlled with different files too.
+	 * Device control is not supported as a file interface, so here we
+	 * need to interact with eBPF.
+	 */
+
+	/* Our real step level is the level for user processes. */
+	if (level == CG_LEVEL_STEP)
+		level = CG_LEVEL_STEP_USER;
+
+	if (!limits)
+		return SLURM_ERROR;
+
+	switch (ctl) {
 	case CG_TRACK:
 		break;
 	case CG_CPUS:
-		rc = common_cgroup_get_param(&g_root_cg, "cpuset.cpus",
-					     &limits->allow_cores,
-					     &limits->cores_size);
-		rc += common_cgroup_get_param(&g_root_cg, "cpuset.mems",
-					      &limits->allow_mems,
-					      &limits->mems_size);
+		if (common_cgroup_set_param(&int_cg[level],
+					    "cpuset.cpus",
+					    limits->allow_cores)
+		    != SLURM_SUCCESS) {
+			rc = SLURM_ERROR;
+		}
+		if (common_cgroup_set_param(&int_cg[level],
+					    "cpuset.mems",
+					    limits->allow_mems)
+		    != SLURM_SUCCESS) {
+			rc = SLURM_ERROR;
+		}
+		break;
+	case CG_MEMORY:
+		if (common_cgroup_set_uint64_param(&int_cg[level],
+						   "memory.max",
+						   limits->limit_in_bytes)
+		    != SLURM_SUCCESS) {
+			rc = SLURM_ERROR;
+		}
+
+		if (limits->memsw_limit_in_bytes != NO_VAL64) {
+			if (common_cgroup_set_uint64_param(
+				    &int_cg[level],
+				    "memory.swap.max",
+				    limits->memsw_limit_in_bytes)
+			    != SLURM_SUCCESS) {
+				rc = SLURM_ERROR;
+			}
+		}
+		break;
+	case CG_DEVICES:
+		break;
+	default:
+		error("cgroup controller %u not supported", ctl);
+		rc = SLURM_ERROR;
+		break;
+	}
+
+	return rc;
+}
+
+extern cgroup_limits_t *cgroup_p_constrain_get(cgroup_ctl_type_t ctl,
+					       cgroup_level_t level)
+{
+	int rc = SLURM_SUCCESS;
+	cgroup_limits_t *limits = xmalloc(sizeof(*limits));
+
+	/* We have no such level in cgroup/v2 hierarchy. */
+	if (level == CG_LEVEL_USER)
+		return SLURM_SUCCESS;
+
+	switch (ctl) {
+	case CG_TRACK:
+		break;
+	case CG_CPUS:
+		if (common_cgroup_get_param(&int_cg[level],
+					    "cpuset.cpus",
+					    &limits->allow_cores,
+					    &limits->cores_size)
+		    != SLURM_SUCCESS)
+			rc = SLURM_ERROR;
+
+		/*
+		 * This means the actual setting is empty, so we will take the
+		 * cpus allowed by the parent reading cpuset.cpus.effective.
+		 */
+		if (limits->cores_size == 1 &&
+		    !xstrcmp(limits->allow_cores, "\n")) {
+			xfree(limits->allow_cores);
+			if (common_cgroup_get_param(&int_cg[level],
+						    "cpuset.cpus.effective",
+						    &limits->allow_cores,
+						    &limits->cores_size)
+			    != SLURM_SUCCESS)
+				rc = SLURM_ERROR;
+		}
+
+		if (common_cgroup_get_param(&int_cg[level],
+					    "cpuset.mems",
+					    &limits->allow_mems,
+					    &limits->mems_size)
+		    != SLURM_SUCCESS) {
+			rc = SLURM_ERROR;
+		}
+
+		/*
+		 * This means the actual setting is empty, so we will take the
+		 * mems allowed by the parent reading cpuset.mems.effective.
+		 */
+		if (limits->mems_size == 1 &&
+		    !xstrcmp(limits->allow_mems, "\n")) {
+			xfree(limits->allow_mems);
+			if (common_cgroup_get_param(&int_cg[level],
+						    "cpuset.mems.effective",
+						    &limits->allow_mems,
+						    &limits->mems_size)
+			    != SLURM_SUCCESS)
+				rc = SLURM_ERROR;
+		}
 
 		if (limits->cores_size > 0)
 			limits->allow_cores[(limits->cores_size)-1] = '\0';
+
 		if (limits->mems_size > 0)
 			limits->allow_mems[(limits->mems_size)-1] = '\0';
 
@@ -753,7 +916,7 @@ extern cgroup_limits_t *cgroup_p_root_constrain_get(cgroup_ctl_type_t sub)
 	case CG_DEVICES:
 		break;
 	default:
-		error("cgroup subsystem %"PRIu16" not supported", sub);
+		error("cgroup controller %u not supported", ctl);
 		rc = SLURM_ERROR;
 		break;
 	}
@@ -762,160 +925,6 @@ extern cgroup_limits_t *cgroup_p_root_constrain_get(cgroup_ctl_type_t sub)
 fail:
 	cgroup_free_limits(limits);
 	return NULL;
-}
-
-extern int cgroup_p_root_constrain_set(cgroup_ctl_type_t sub,
-				       cgroup_limits_t *limits)
-{
-	/*
-	 * No constrain is needed for our root in v2, they are applied to jobs,
-	 * steps or to the slurmd cgroup only
-	 */
-	return SLURM_SUCCESS;
-}
-
-extern cgroup_limits_t *cgroup_p_system_constrain_get(cgroup_ctl_type_t sub)
-{
-	/*
-	 * DEV_NOTES
-	 * For future usage, just return the requested constrains from the
-	 * $cg_root/slurmd/
-	 */
-	cgroup_limits_t *limits = NULL;
-	return limits;
-}
-
-extern int cgroup_p_system_constrain_set(cgroup_ctl_type_t sub,
-					 cgroup_limits_t *limits)
-{
-	int rc = SLURM_SUCCESS;
-
-	if (!limits)
-		return SLURM_ERROR;
-
-	switch (sub) {
-	case CG_TRACK:
-		break;
-	case CG_CPUS:
-		rc = common_cgroup_set_param(&g_sys_cg, "cpuset.cpus",
-					     limits->allow_cores);
-		//rc += common_cgroup_set_param(&g_sys_cg, "cpuset.mems",
-		//				limits->allow_mems);
-		break;
-	case CG_MEMORY:
-		common_cgroup_set_uint64_param(&g_sys_cg,
-					       "memory.limit_in_bytes",
-					       limits->limit_in_bytes);
-		break;
-	case CG_DEVICES:
-		break;
-	default:
-		error("cgroup subsystem %"PRIu16" not supported", sub);
-		rc = SLURM_ERROR;
-		break;
-	}
-
-	return rc;
-}
-
-extern int cgroup_p_user_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits)
-{
-	/* There's no user directory in cgroup v2 hierarchy. */
-	return SLURM_SUCCESS;
-}
-
-extern int cgroup_p_job_constrain_set(cgroup_ctl_type_t sub,
-				      stepd_step_rec_t *job,
-				      cgroup_limits_t *limits)
-{
-	/* DEV_NOTES - EXPERIMENTAL
-	 * There's no kmem constrain support currently in v2.
-	 * Memory limits have changed to high, low, min, max.
-	 * Swap limits are controlled with different files too.
-	 * Device control is not supported as a file interface, so here we
-	 * need to interact with eBPF.
-	 */
-	int rc = SLURM_SUCCESS;
-
-	if (!limits)
-		return SLURM_ERROR;
-
-	switch (sub) {
-	case CG_TRACK:
-		break;
-	case CG_CPUS:
-		rc = common_cgroup_set_param(&g_job_cg, "cpuset.cpus",
-					     limits->allow_cores);
-		rc += common_cgroup_set_param(&g_job_cg, "cpuset.mems",
-					      limits->allow_mems);
-		break;
-	case CG_MEMORY:
-		rc = common_cgroup_set_uint64_param(&g_job_cg,
-						    "memory.max",
-						    limits->limit_in_bytes);
-		if (limits->memsw_limit_in_bytes != NO_VAL64)
-			rc += common_cgroup_set_uint64_param(
-				&g_job_cg,
-				"memory.swap.max",
-				limits->memsw_limit_in_bytes);
-		break;
-	case CG_DEVICES:
-		break;
-	default:
-		error("cgroup subsystem %"PRIu16" not supported", sub);
-		rc = SLURM_ERROR;
-		break;
-	}
-
-	return rc;
-}
-
-extern int cgroup_p_step_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits)
-{
-	/* DEV_NOTES - EXPERIMENTAL
-	 * There's no kmem constrain support currently in v2.
-	 * Memory limits have changed to high, low, min, max.
-	 * Swap limits are controlled with different files too.
-	 * Device control is not supported as a file interface, so here we
-	 * need to interact with eBPF.
-	 */
-	int rc = SLURM_SUCCESS;
-
-	if (!limits)
-		return SLURM_ERROR;
-
-	switch (sub) {
-	case CG_TRACK:
-		break;
-	case CG_CPUS:
-		rc = common_cgroup_set_param(&g_step_user_cg, "cpuset.cpus",
-					     limits->allow_cores);
-		rc += common_cgroup_set_param(&g_step_user_cg, "cpuset.mems",
-					      limits->allow_mems);
-		break;
-	case CG_MEMORY:
-		rc = common_cgroup_set_uint64_param(&g_step_user_cg,
-						    "memory.max",
-						    limits->limit_in_bytes);
-		if (limits->memsw_limit_in_bytes != NO_VAL64)
-			rc += common_cgroup_set_uint64_param(
-				&g_step_user_cg,
-				"memory.swap.max",
-				limits->memsw_limit_in_bytes);
-		break;
-	case CG_DEVICES:
-		break;
-	default:
-		error("cgroup subsystem %"PRIu16" not supported", sub);
-		rc = SLURM_ERROR;
-		break;
-	}
-
-	return rc;
 }
 
 extern int cgroup_p_step_start_oom_mgr()
@@ -929,31 +938,8 @@ extern cgroup_oom_t *cgroup_p_step_stop_oom_mgr(stepd_step_rec_t *job)
 	return g_oom_step_results;
 }
 
-extern int cgroup_p_accounting_init()
-{
-	/*
-	 * Accounting controllers are implictly enabled in when enabling cpu
-	 * and mem in subtree_control.
-	 */
-	/*
-	 * DEV_NOTES - We need to modify the structure creating task_X and
-	 * moving pids there.
-	 */
-	return SLURM_SUCCESS;
-}
-
-extern int cgroup_p_accounting_fini()
-{
-	/* DEV_NOTES - IMPLEMENT ME
-	 * Destroy the step calling cgroup_p_step_destroy
-	 * ... may need the task_acct_list ..
-	 * just return
-	 */
-	return SLURM_SUCCESS;
-}
-
-extern int cgroup_p_task_addto_accounting(pid_t pid, stepd_step_rec_t *job,
-					  uint32_t task_id)
+extern int cgroup_p_task_addto(cgroup_ctl_type_t ctl, stepd_step_rec_t *job,
+			       pid_t pid, uint32_t task_id)
 {
 	/* DEV_NOTES - IMPLEMENT ME
 	 * create step_y/task_z

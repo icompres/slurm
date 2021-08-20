@@ -1,0 +1,17 @@
+Interfaces that do not exist anymore or work different:
+----------------------------------------------------------
+OLD INTERFACE			NOW NEED TO WORK WITH
+'''''''''''''			''''''''''''''''''''''
+memory.kmem*			none
+memory.limit_in_bytes		memory.max
+memory.memsw_limit_in_bytes 	memory.swap.max
+memory.swappiness		(memory.swap.high, memory.swap.max) ??
+freezer.state			cgroup.freeze
+cpuset.expected_usage_in_bytes	none		(HAVE_NATIVE_CRAY only)
+cpuset.cpus			cpuset.cpus.effective, cpuset.cpus
+cpuset.mems			cpuset.mems.effective, cpuset.mem
+s
+Other changes:
+---------------
+- Freezer controller is always implicit
+- Devices controller is now a EBF

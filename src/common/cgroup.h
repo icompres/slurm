@@ -89,7 +89,7 @@
 
 /* Current supported cgroup controller types */
 typedef enum {
-	CG_TRACK,
+	CG_TRACK = 0,
 	CG_CPUS,
 	CG_MEMORY,
 	CG_DEVICES,
@@ -102,6 +102,8 @@ typedef enum {
 	CG_LEVEL_USER,
 	CG_LEVEL_JOB,
 	CG_LEVEL_STEP,
+	CG_LEVEL_STEP_SLURM,
+	CG_LEVEL_STEP_USER,
 	CG_LEVEL_TASK,
 	CG_LEVEL_SYSTEM,
 	CG_LEVEL_CNT

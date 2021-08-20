@@ -61,37 +61,24 @@
 /* Functions */
 extern int init(void);
 extern int fini(void);
-extern int cgroup_p_initialize(cgroup_ctl_type_t sub);
-extern int cgroup_p_system_create(cgroup_ctl_type_t sub);
-extern int cgroup_p_system_addto(cgroup_ctl_type_t sub, pid_t *pids, int npids);
-extern int cgroup_p_system_destroy(cgroup_ctl_type_t sub);
-extern int cgroup_p_step_create(cgroup_ctl_type_t sub, stepd_step_rec_t *job);
-extern int cgroup_p_step_addto(cgroup_ctl_type_t sub, pid_t *pids, int npids);
+extern int cgroup_p_initialize(cgroup_ctl_type_t ctl);
+extern int cgroup_p_system_create(cgroup_ctl_type_t ctl);
+extern int cgroup_p_system_addto(cgroup_ctl_type_t ctl, pid_t *pids, int npids);
+extern int cgroup_p_system_destroy(cgroup_ctl_type_t ctl);
+extern int cgroup_p_step_create(cgroup_ctl_type_t ctl, stepd_step_rec_t *job);
+extern int cgroup_p_step_addto(cgroup_ctl_type_t ctl, pid_t *pids, int npids);
 extern int cgroup_p_step_get_pids(pid_t **pids, int *npids);
 extern int cgroup_p_step_suspend();
 extern int cgroup_p_step_resume();
-extern int cgroup_p_step_destroy(cgroup_ctl_type_t sub);
+extern int cgroup_p_step_destroy(cgroup_ctl_type_t ctl);
 extern bool cgroup_p_has_pid(pid_t pid);
-extern cgroup_limits_t *cgroup_p_root_constrain_get(cgroup_ctl_type_t sub);
-extern int cgroup_p_root_constrain_set(cgroup_ctl_type_t sub,
-				       cgroup_limits_t *limits);
-extern cgroup_limits_t *cgroup_p_system_constrain_get(cgroup_ctl_type_t sub);
-extern int cgroup_p_system_constrain_set(cgroup_ctl_type_t sub,
-					 cgroup_limits_t *limits);
-extern int cgroup_p_user_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits);
-extern int cgroup_p_job_constrain_set(cgroup_ctl_type_t sub,
-				      stepd_step_rec_t *job,
-				      cgroup_limits_t *limits);
-extern int cgroup_p_step_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits);
+extern cgroup_limits_t *cgroup_p_constrain_get(cgroup_ctl_type_t ctl,
+					       cgroup_level_t level);
+extern int cgroup_p_constrain_set(cgroup_ctl_type_t ctl, cgroup_level_t level,
+				  cgroup_limits_t *limits);
 extern int cgroup_p_step_start_oom_mgr();
 extern cgroup_oom_t *cgroup_p_step_stop_oom_mgr(stepd_step_rec_t *job);
-extern int cgroup_p_accounting_init();
-extern int cgroup_p_accounting_fini();
-extern int cgroup_p_task_addto_accounting(pid_t pid, stepd_step_rec_t *job,
-					  uint32_t task_id);
+extern int cgroup_p_task_addto(cgroup_ctl_type_t ctl, stepd_step_rec_t *job,
+			       pid_t pid, uint32_t task_id);
 extern cgroup_acct_t *cgroup_p_task_get_acct_data(uint32_t taskid);
 #endif /* !_CGROUP_V2_H */
