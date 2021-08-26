@@ -81,13 +81,7 @@
  */
 const char plugin_name[] = "PMIx plugin";
 
-#if (HAVE_PMIX_VER == 1)
-const char plugin_type[] = "mpi/pmix_v1";
-#elif (HAVE_PMIX_VER == 2)
-const char plugin_type[] = "mpi/pmix_v2";
-#elif (HAVE_PMIX_VER == 3)
-const char plugin_type[] = "mpi/pmix_v3";
-#endif
+const char plugin_type[] = "mpi/pmix";
 
 const uint32_t plugin_version = SLURM_VERSION_NUMBER;
 
@@ -106,24 +100,13 @@ static void *_libpmix_open(void)
 	void *lib_plug = NULL;
 	char *full_path = NULL;
 
-#ifdef PMIXP_V1_LIBPATH
-	xstrfmtcat(full_path, "%s/", PMIXP_V1_LIBPATH);
-#elif defined PMIXP_V2_LIBPATH
-	xstrfmtcat(full_path, "%s/", PMIXP_V2_LIBPATH);
-#elif defined PMIXP_V3_LIBPATH
-	xstrfmtcat(full_path, "%s/", PMIXP_V3_LIBPATH);
-#endif
+	xstrfmtcat(full_path, "%s/", PMIXP_LIBPATH);
 	xstrfmtcat(full_path, "libpmix.so");
 
 	lib_plug = dlopen(full_path, RTLD_LAZY | RTLD_GLOBAL);
 	xfree(full_path);
 
-	if (lib_plug && (HAVE_PMIX_VER != pmixp_lib_get_version())) {
-		PMIXP_ERROR("pmi/pmix: incorrect PMIx library version loaded %d was loaded, required %d version",
-			    pmixp_lib_get_version(), (int)HAVE_PMIX_VER);
-		_libpmix_close(lib_plug);
-		lib_plug = NULL;
-	}
+	info("pmi/pmix: PMIx library version %d loaded", pmixp_lib_get_version());
 
 	return lib_plug;
 }

@@ -26,77 +26,9 @@ endif
 pmix_ldflags = $(PLUGIN_FLAGS) $(HWLOC_LDFLAGS) $(UCX_LDFLAGS)
 pmix_libadd = $(HWLOC_LIBS) $(UCX_LIBS)
 
-# pkglib_v#dir is needed in each one of the below because of the way we
-# use pkglib_v#_LTLIBRARIES even though it is the same for each one it still
-# needs to be defined.
-
-if HAVE_PMIX_V1
-
-pkglib_v1dir=$(pkglibdir)
-pkglib_v1_LTLIBRARIES = mpi_pmix_v1.la
-mpi_pmix_v1_la_SOURCES = $(pmix_src) pmixp_client_v1.c
-mpi_pmix_v1_la_LIBADD = $(pmix_libadd)
-mpi_pmix_v1_la_LDFLAGS = $(pmix_ldflags) $(PMIX_V1_LDFLAGS)
-mpi_pmix_v1_la_CPPFLAGS = $(AM_CPPFLAGS) $(PMIX_V1_CPPFLAGS) -DHAVE_PMIX_VER=1
-
-endif
-
-if HAVE_PMIX_V2
-
-pkglib_v2dir=$(pkglibdir)
-pkglib_v2_LTLIBRARIES = mpi_pmix_v2.la
-mpi_pmix_v2_la_SOURCES = $(pmix_src) pmixp_client_v2.c
-mpi_pmix_v2_la_LIBADD = $(pmix_libadd)
-mpi_pmix_v2_la_LDFLAGS = $(pmix_ldflags) $(PMIX_V2_LDFLAGS)
-mpi_pmix_v2_la_CPPFLAGS = $(AM_CPPFLAGS) $(PMIX_V2_CPPFLAGS) -DHAVE_PMIX_VER=2
-
-endif
-
-if HAVE_PMIX_V3
-
-pkglib_v3dir=$(pkglibdir)
-pkglib_v3_LTLIBRARIES = mpi_pmix_v3.la
-mpi_pmix_v3_la_SOURCES = $(pmix_src) pmixp_client_v2.c
-mpi_pmix_v3_la_LIBADD = $(pmix_libadd)
-mpi_pmix_v3_la_LDFLAGS = $(pmix_ldflags) $(PMIX_V3_LDFLAGS)
-mpi_pmix_v3_la_CPPFLAGS = $(AM_CPPFLAGS) $(PMIX_V3_CPPFLAGS) -DHAVE_PMIX_VER=3
-
-endif
-
-if HAVE_PMIX_V4
-
-pkglib_v4dir=$(pkglibdir)
-pkglib_v4_LTLIBRARIES = mpi_pmix_v4.la
-mpi_pmix_v4_la_SOURCES = $(pmix_src) pmixp_client_v2.c
-mpi_pmix_v4_la_LIBADD = $(pmix_libadd)
-mpi_pmix_v4_la_LDFLAGS = $(pmix_ldflags) $(PMIX_V4_LDFLAGS)
-mpi_pmix_v4_la_CPPFLAGS = $(AM_CPPFLAGS) $(PMIX_V4_CPPFLAGS) -DHAVE_PMIX_VER=4
-
-endif
-
-if HAVE_PMIX_V4
-mpi_pmix_so := mpi_pmix_v4.so
-else
-
-if HAVE_PMIX_V3
-mpi_pmix_so := mpi_pmix_v3.so
-else
-
-if HAVE_PMIX_V2
-mpi_pmix_so := mpi_pmix_v2.so
-else
-
-if HAVE_PMIX_V1
-mpi_pmix_so := mpi_pmix_v1.so
-endif
-
-endif
-endif
-endif
-
-install-exec-hook:
-	rm -rf $(DESTDIR)$(pkglibdir)/mpi_pmix.so
-	$(LN_S) ./$(mpi_pmix_so)  $(DESTDIR)$(pkglibdir)/mpi_pmix.so
-
-uninstall-hook:
-	rm -rf $(DESTDIR)$(pkglibdir)/mpi_pmix.so
+pkglib_dir=$(pkglibdir)
+pkglib_LTLIBRARIES = mpi_pmix.la
+mpi_pmix_la_SOURCES = $(pmix_src) pmixp_client_v2.c
+mpi_pmix_la_LIBADD = $(pmix_libadd)
+mpi_pmix_la_LDFLAGS = $(pmix_ldflags) $(PMIX_LDFLAGS)
+mpi_pmix_la_CPPFLAGS = $(AM_CPPFLAGS) $(PMIX_CPPFLAGS)

@@ -52,6 +52,8 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#include <pmix.h>
 #include <pmix_server.h>
 
 static int _client_connected(const pmix_proc_t *proc, void *server_object,
