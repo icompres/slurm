@@ -6146,7 +6146,7 @@ extern int gres_job_state_pack(List gres_list, buf_t *buffer,
 	while ((gres_ptr = (gres_state_t *) list_next(gres_iter))) {
 		gres_job_ptr = (gres_job_state_t *) gres_ptr->gres_data;
 
-		if (protocol_version >= SLURM_20_11_PROTOCOL_VERSION) {
+		if (protocol_version >= SLURM_MIN_PROTOCOL_VERSION) {
 			pack32(magic, buffer);
 			pack32(gres_ptr->plugin_id, buffer);
 			pack16(gres_job_ptr->cpus_per_gres, buffer);
@@ -6157,59 +6157,6 @@ extern int gres_job_state_pack(List gres_list, buf_t *buffer,
 			pack64(gres_job_ptr->gres_per_task, buffer);
 			pack64(gres_job_ptr->mem_per_gres, buffer);
 			pack16(gres_job_ptr->ntasks_per_gres, buffer);
-			pack64(gres_job_ptr->total_gres, buffer);
-			packstr(gres_job_ptr->type_name, buffer);
-			pack32(gres_job_ptr->node_cnt, buffer);
-
-			if (gres_job_ptr->gres_cnt_node_alloc) {
-				pack8((uint8_t) 1, buffer);
-				pack64_array(gres_job_ptr->gres_cnt_node_alloc,
-					     gres_job_ptr->node_cnt, buffer);
-			} else {
-				pack8((uint8_t) 0, buffer);
-			}
-
-			if (gres_job_ptr->gres_bit_alloc) {
-				pack8((uint8_t) 1, buffer);
-				for (i = 0; i < gres_job_ptr->node_cnt; i++) {
-					pack_bit_str_hex(gres_job_ptr->
-							 gres_bit_alloc[i],
-							 buffer);
-				}
-			} else {
-				pack8((uint8_t) 0, buffer);
-			}
-			if (details && gres_job_ptr->gres_bit_step_alloc) {
-				pack8((uint8_t) 1, buffer);
-				for (i = 0; i < gres_job_ptr->node_cnt; i++) {
-					pack_bit_str_hex(gres_job_ptr->
-							 gres_bit_step_alloc[i],
-							 buffer);
-				}
-			} else {
-				pack8((uint8_t) 0, buffer);
-			}
-			if (details && gres_job_ptr->gres_cnt_step_alloc) {
-				pack8((uint8_t) 1, buffer);
-				for (i = 0; i < gres_job_ptr->node_cnt; i++) {
-					pack64(gres_job_ptr->
-					       gres_cnt_step_alloc[i],
-					       buffer);
-				}
-			} else {
-				pack8((uint8_t) 0, buffer);
-			}
-			rec_cnt++;
-		} else if (protocol_version >= SLURM_MIN_PROTOCOL_VERSION) {
-			pack32(magic, buffer);
-			pack32(gres_ptr->plugin_id, buffer);
-			pack16(gres_job_ptr->cpus_per_gres, buffer);
-			pack16(gres_job_ptr->flags, buffer);
-			pack64(gres_job_ptr->gres_per_job, buffer);
-			pack64(gres_job_ptr->gres_per_node, buffer);
-			pack64(gres_job_ptr->gres_per_socket, buffer);
-			pack64(gres_job_ptr->gres_per_task, buffer);
-			pack64(gres_job_ptr->mem_per_gres, buffer);
 			pack64(gres_job_ptr->total_gres, buffer);
 			packstr(gres_job_ptr->type_name, buffer);
 			pack32(gres_job_ptr->node_cnt, buffer);
@@ -6303,7 +6250,7 @@ extern int gres_job_state_unpack(List *gres_list, buf_t *buffer,
 			break;
 		rec_cnt--;
 
-		if (protocol_version >= SLURM_20_11_PROTOCOL_VERSION) {
+		if (protocol_version >= SLURM_MIN_PROTOCOL_VERSION) {
 			safe_unpack32(&magic, buffer);
 			if (magic != GRES_MAGIC)
 				goto unpack_error;
@@ -6317,69 +6264,6 @@ extern int gres_job_state_unpack(List *gres_list, buf_t *buffer,
 			safe_unpack64(&gres_job_ptr->gres_per_task, buffer);
 			safe_unpack64(&gres_job_ptr->mem_per_gres, buffer);
 			safe_unpack16(&gres_job_ptr->ntasks_per_gres, buffer);
-			safe_unpack64(&gres_job_ptr->total_gres, buffer);
-			safe_unpackstr_xmalloc(&gres_job_ptr->type_name,
-					       &utmp32, buffer);
-			gres_job_ptr->type_id =
-				gres_build_id(gres_job_ptr->type_name);
-			safe_unpack32(&gres_job_ptr->node_cnt, buffer);
-			if (gres_job_ptr->node_cnt > NO_VAL)
-				goto unpack_error;
-
-			safe_unpack8(&has_more, buffer);
-			if (has_more) {
-				safe_unpack64_array(
-					&gres_job_ptr->gres_cnt_node_alloc,
-					&utmp32, buffer);
-			}
-
-			safe_unpack8(&has_more, buffer);
-			if (has_more) {
-				safe_xcalloc(gres_job_ptr->gres_bit_alloc,
-					     gres_job_ptr->node_cnt,
-					     sizeof(bitstr_t *));
-				for (i = 0; i < gres_job_ptr->node_cnt; i++) {
-					unpack_bit_str_hex(&gres_job_ptr->
-							   gres_bit_alloc[i],
-							   buffer);
-				}
-			}
-			safe_unpack8(&has_more, buffer);
-			if (has_more) {
-				safe_xcalloc(gres_job_ptr->gres_bit_step_alloc,
-					     gres_job_ptr->node_cnt,
-					     sizeof(bitstr_t *));
-				for (i = 0; i < gres_job_ptr->node_cnt; i++) {
-					unpack_bit_str_hex(&gres_job_ptr->
-							   gres_bit_step_alloc[i],
-							   buffer);
-				}
-			}
-			safe_unpack8(&has_more, buffer);
-			if (has_more) {
-				safe_xcalloc(gres_job_ptr->gres_cnt_step_alloc,
-					     gres_job_ptr->node_cnt,
-					     sizeof(uint64_t));
-				for (i = 0; i < gres_job_ptr->node_cnt; i++) {
-					safe_unpack64(&gres_job_ptr->
-						      gres_cnt_step_alloc[i],
-						      buffer);
-				}
-			}
-		} else if (protocol_version >= SLURM_MIN_PROTOCOL_VERSION) {
-			safe_unpack32(&magic, buffer);
-			if (magic != GRES_MAGIC)
-				goto unpack_error;
-			safe_unpack32(&plugin_id, buffer);
-			gres_job_ptr = xmalloc(sizeof(gres_job_state_t));
-			safe_unpack16(&gres_job_ptr->cpus_per_gres, buffer);
-			safe_unpack16(&gres_job_ptr->flags, buffer);
-			safe_unpack64(&gres_job_ptr->gres_per_job, buffer);
-			safe_unpack64(&gres_job_ptr->gres_per_node, buffer);
-			safe_unpack64(&gres_job_ptr->gres_per_socket, buffer);
-			safe_unpack64(&gres_job_ptr->gres_per_task, buffer);
-			safe_unpack64(&gres_job_ptr->mem_per_gres, buffer);
-			gres_job_ptr->ntasks_per_gres = NO_VAL16;
 			safe_unpack64(&gres_job_ptr->total_gres, buffer);
 			safe_unpackstr_xmalloc(&gres_job_ptr->type_name,
 					       &utmp32, buffer);
@@ -8515,8 +8399,15 @@ fini:	xfree(name);
 	return step_gres_data;
 }
 
-/* Test that the step does not request more GRES than the job contains */
-static void _validate_step_counts(List step_gres_list, List job_gres_list,
+/*
+ * Test that the step does not request more GRES than what the job requested.
+ * This function does *not* check the step's requested GRES against the job's
+ * allocated GRES. The job may be allocated more GRES than what it requested
+ * (for example, when --exclusive is used the job is allocated all the GRES
+ * on the node), but that's okay. We check the step request against the job's
+ * allocated GRES in gres_step_test().
+ */
+static void _validate_step_counts(List step_gres_list, List job_gres_list_req,
 				  uint32_t step_min_nodes, int *rc,
 				  char **err_msg)
 {
@@ -8530,7 +8421,7 @@ static void _validate_step_counts(List step_gres_list, List job_gres_list,
 
 	if (!step_gres_list || (list_count(step_gres_list) == 0))
 		return;
-	if (!job_gres_list  || (list_count(job_gres_list)  == 0)) {
+	if (!job_gres_list_req  || (list_count(job_gres_list_req)  == 0)) {
 		if (err_msg) {
 			xfree(*err_msg);
 			xstrfmtcat(*err_msg, "Step requested GRES but job doesn't have GRES");
@@ -8547,7 +8438,7 @@ static void _validate_step_counts(List step_gres_list, List job_gres_list,
 			job_search_key.type_id = NO_VAL;
 		else
 			job_search_key.type_id = step_gres_data->type_id;
-		job_gres_ptr = list_find_first(job_gres_list,
+		job_gres_ptr = list_find_first(job_gres_list_req,
 					       gres_find_job_by_key,
 					       &job_search_key);
 		if (!job_gres_ptr || !job_gres_ptr->gres_data) {
@@ -8706,14 +8597,6 @@ static int _handle_ntasks_per_tres_step(List new_step_list,
 	return rc;
 }
 
-/*
- * Given a step's requested gres configuration, validate it and build gres list
- * IN *tres* - step's requested gres input string
- * OUT step_gres_list - List of Gres records for this step to track usage
- * IN job_gres_list - List of Gres records for this job
- * IN job_id, step_id - ID of the step being allocated.
- * RET SLURM_SUCCESS or ESLURM_INVALID_GRES
- */
 extern int gres_step_state_validate(char *cpus_per_tres,
 				    char *tres_per_step,
 				    char *tres_per_node,
@@ -8723,7 +8606,7 @@ extern int gres_step_state_validate(char *cpus_per_tres,
 				    uint16_t ntasks_per_tres,
 				    uint32_t step_min_nodes,
 				    List *step_gres_list,
-				    List job_gres_list, uint32_t job_id,
+				    List job_gres_list_req, uint32_t job_id,
 				    uint32_t step_id,
 				    uint32_t *num_tasks,
 				    uint32_t *cpu_count, char **err_msg)
@@ -8824,7 +8707,7 @@ extern int gres_step_state_validate(char *cpus_per_tres,
 		FREE_NULL_LIST(new_step_list);
 	} else {
 		if (rc == SLURM_SUCCESS)
-			_validate_step_counts(new_step_list, job_gres_list,
+			_validate_step_counts(new_step_list, job_gres_list_req,
 					      step_min_nodes, &rc, err_msg);
 		if (rc == SLURM_SUCCESS) {
 			bool overlap_merge = false;

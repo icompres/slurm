@@ -701,14 +701,6 @@ int main(int argc, char **argv)
 		 */
 		fed_mgr_init(acct_db_conn);
 
-		/*
-		 * For cross-cluster job dependencies to work, we need to have
-		 * initialized federation first. So rather than calling this
-		 * from read_slurm_conf() we call it here immediately after
-		 * fed_mgr_init().
-		 */
-		restore_job_dependencies();
-
 		if (priority_g_init() != SLURM_SUCCESS)
 			fatal("failed to initialize priority plugin");
 		if (slurmctld_plugstack_init())
@@ -3257,7 +3249,7 @@ static int _controller_index(void)
 	 * External HA mode. Here a single control_addr has been defined,
 	 * but multiple hostnames are in control_machine[0] with comma
 	 * separation. If our hostname matches any of those, we are considered
-	 * to be a valid controller, and which is active much be managed by
+	 * to be a valid controller, and which is active must be managed by
 	 * an external HA solution.
 	 */
 	if (xstrchr(slurm_conf.control_machine[0], ',')) {
