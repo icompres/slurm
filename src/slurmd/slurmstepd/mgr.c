@@ -2152,6 +2152,7 @@ _wait_for_any_task(stepd_step_rec_t *job, bool waitflag)
 			job->envtp->batch_flag = job->batch;
 			job->envtp->uid = job->uid;
 			job->envtp->user_name = xstrdup(job->user_name);
+			job->envtp->nodeid = job->nodeid;
 
 			/*
 			 * Modify copy of job's environment. Do not alter in
@@ -2167,6 +2168,9 @@ _wait_for_any_task(stepd_step_rec_t *job, bool waitflag)
 
 			setenvf(&job->env, "SLURM_SCRIPT_CONTEXT",
 				"epilog_task");
+			setenvf(&job->env, "SLURMD_NODENAME", "%s",
+				conf->node_name);
+
 			if (job->task_epilog) {
 				_run_script_as_user("user task_epilog",
 						    job->task_epilog,
@@ -2513,8 +2517,8 @@ _send_complete_batch_script_msg(stepd_step_rec_t *job, int err, int status)
 	req_msg.msg_type= REQUEST_COMPLETE_BATCH_SCRIPT;
 	req_msg.data	= &req;
 
-	info("sending REQUEST_COMPLETE_BATCH_SCRIPT, error:%d status:%d",
-	     err, status);
+	log_flag(PROTOCOL, "sending REQUEST_COMPLETE_BATCH_SCRIPT slurm_rc:%s job_rc:%d",
+		 slurm_strerror(err), status);
 
 	/* Note: these log messages don't go to slurmd.log from here */
 	for (i = 0; i <= MAX_RETRY; i++) {

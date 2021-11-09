@@ -225,7 +225,6 @@ static bool _requeue_setup_env_fail(void);
  */
 static List waiters;
 
-static pthread_mutex_t launch_mutex = PTHREAD_MUTEX_INITIALIZER;
 static time_t startup = 0;		/* daemon startup time */
 static time_t last_slurmctld_msg = 0;
 
@@ -1164,7 +1163,7 @@ static int _check_job_credential(launch_tasks_request_msg_t *req,
 	 * Overwrite any memory limits in the RPC with contents of the
 	 * memory limit within the credential.
 	 */
-	slurm_cred_get_mem(cred, node_id, __func__, &req->job_mem_lim,
+	slurm_cred_get_mem(cred, conf->node_name, __func__, &req->job_mem_lim,
 			   &req->step_mem_lim);
 
 	/* Reset the CPU count on this node to correct value. */
@@ -1403,8 +1402,6 @@ _rpc_launch_tasks(slurm_msg_t *msg)
 	int node_id = 0;
 	bitstr_t *numa_bitmap = NULL;
 
-	slurm_mutex_lock(&launch_mutex);
-
 #ifndef HAVE_FRONT_END
 	/* It is always 0 for front end systems */
 	node_id = nodelist_find(req->complete_nodelist, conf->node_name);
@@ -1547,7 +1544,7 @@ _rpc_launch_tasks(slurm_msg_t *msg)
 	if (slurm_cred_revoked(conf->vctx, req->cred)) {
 		info("Job %u already killed, do not launch %ps",
 		     req->step_id.job_id, &req->step_id);
-		errnum = ESLURMD_CREDENTIAL_REVOKED;
+		errnum = SLURM_SUCCESS;
 		goto done;
 	}
 #endif
@@ -1603,6 +1600,7 @@ _rpc_launch_tasks(slurm_msg_t *msg)
 	errnum = _forkexec_slurmstepd(LAUNCH_TASKS, (void *)req, cli, &self,
 				      step_hset, msg->protocol_version);
 	debug3("%s: return from _forkexec_slurmstepd", __func__);
+
 	_launch_complete_add(req->step_id.job_id);
 
 done:
@@ -1630,7 +1628,6 @@ done:
 		send_registration_msg(errnum, false);
 	}
 
-	slurm_mutex_unlock(&launch_mutex);
 }
 
 /*
@@ -1839,8 +1836,8 @@ _set_batch_job_limits(slurm_msg_t *msg)
 		return;
 	req->job_core_spec = arg.job_core_spec;	/* Prevent user reset */
 
-	/* We only should ever have 1 in here so just get the first */
-	slurm_cred_get_mem(req->cred, 0, __func__, &req->job_mem, NULL);
+	slurm_cred_get_mem(req->cred, conf->node_name, __func__, &req->job_mem,
+			   NULL);
 
 	/*
 	 * handle x11 settings here since this is the only access to the cred
@@ -1916,8 +1913,7 @@ static int _convert_job_mem(slurm_msg_t *msg)
 {
 	prolog_launch_msg_t *req = (prolog_launch_msg_t *)msg->data;
 	slurm_cred_arg_t arg;
-	hostset_t j_hset = NULL;
-	int rc, host_index;
+	int rc;
 
 	rc = slurm_cred_verify(conf->vctx, req->cred, &arg,
 			       msg->protocol_version);
@@ -1934,18 +1930,10 @@ static int _convert_job_mem(slurm_msg_t *msg)
 
 	req->nnodes = arg.job_nhosts;
 
-	if (!(j_hset = hostset_create(arg.job_hostlist))) {
-		error("%s: Unable to parse credential hostlist: `%s'",
-		      __func__, arg.job_hostlist);
-		goto fini;
-	}
-	host_index = hostset_find(j_hset, conf->node_name);
-	hostset_destroy(j_hset);
+	slurm_cred_get_mem(req->cred, conf->node_name, __func__,
+			   &req->job_mem_limit, NULL);
 
-	slurm_cred_get_mem(req->cred, host_index, __func__, &req->job_mem_limit,
-			   NULL);
-
-fini:	slurm_cred_free_args(&arg);
+	slurm_cred_free_args(&arg);
 	return SLURM_SUCCESS;
 }
 
@@ -2186,6 +2174,7 @@ static void _rpc_prolog(slurm_msg_t *msg)
 
 		job_env.jobid = req->job_id;
 		job_env.step_id = 0;	/* not available */
+		job_env.node_aliases = req->alias_list;
 		job_env.node_list = req->nodes;
 		job_env.het_job_id = req->het_job_id;
 		job_env.partition = req->partition;
@@ -2455,11 +2444,10 @@ static void _rpc_batch_job(slurm_msg_t *msg)
 	if (slurm_cred_revoked(conf->vctx, req->cred)) {
 		info("Job %u already killed, do not launch batch job",
 		     req->job_id);
-		rc = ESLURMD_CREDENTIAL_REVOKED;     /* job already ran */
+		rc = SLURM_SUCCESS;     /* job already ran */
 		goto done;
 	}
 
-	slurm_mutex_lock(&launch_mutex);
 	info("Launching batch job %u for UID %u", req->job_id, req->uid);
 
 	debug3("_rpc_batch_job: call to _forkexec_slurmstepd");
@@ -2467,7 +2455,6 @@ static void _rpc_batch_job(slurm_msg_t *msg)
 				  (hostset_t)NULL, SLURM_PROTOCOL_VERSION);
 	debug3("_rpc_batch_job: return from _forkexec_slurmstepd: %d", rc);
 
-	slurm_mutex_unlock(&launch_mutex);
 	_launch_complete_add(req->job_id);
 
 	/* On a busy system, slurmstepd may take a while to respond,

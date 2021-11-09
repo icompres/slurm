@@ -1223,6 +1223,19 @@ extern bb_alloc_t *bb_alloc_job(bb_state_t *state_ptr, job_record_t *job_ptr,
 	return bb_alloc;
 }
 
+extern int bb_build_bb_script(job_record_t *job_ptr, char *script_file)
+{
+	char *out_buf = NULL;
+	int rc;
+
+	xstrcat(out_buf, "#!/bin/bash\n");
+	xstrcat(out_buf, job_ptr->burst_buffer);
+	rc = bb_write_file(script_file, out_buf);
+	xfree(out_buf);
+
+	return rc;
+}
+
 /* Free memory associated with allocated bb record, caller is responsible for
  * maintaining linked list */
 extern void bb_free_alloc_buf(bb_alloc_t *bb_alloc)
@@ -2044,7 +2057,7 @@ extern bool bb_valid_pool_test(bb_state_t *state_ptr, char *pool_name)
 
 extern int bb_write_file(char *file_name, char *buf)
 {
-	int amount, fd, nwrite, pos;
+	int fd, nwrite;
 
 	(void) unlink(file_name);
 	fd = creat(file_name, 0600);
@@ -2059,20 +2072,15 @@ extern int bb_write_file(char *file_name, char *buf)
 	}
 
 	nwrite = strlen(buf);
-	pos = 0;
-	while (nwrite > 0) {
-		amount = write(fd, &buf[pos], nwrite);
-		if ((amount < 0) && (errno != EINTR)) {
-			error("Error writing file %s, %m", file_name);
-			close(fd);
-			return ESLURM_WRITING_TO_FILE;
-		}
-		nwrite -= amount;
-		pos    += amount;
-	}
+	safe_write(fd, buf, nwrite);
 
 	(void) close(fd);
 	return SLURM_SUCCESS;
+
+rwfail:
+	error("Error writing file %s: %m", file_name);
+	(void) close(fd);
+	return SLURM_ERROR;
 }
 
 extern int bb_write_nid_file(char *file_name, char *node_list,

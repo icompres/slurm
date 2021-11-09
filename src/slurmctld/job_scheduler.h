@@ -48,6 +48,8 @@ typedef struct job_queue_rec {
 	uint32_t array_task_id;		/* Job array, task ID */
 	uint32_t job_id;		/* Job ID */
 	job_record_t *job_ptr;		/* Pointer to job record */
+	char *features;
+	List feature_list;
 	part_record_t *part_ptr;	/* Pointer to partition record. Each
 					 * job may have multiple partitions. */
 	uint32_t priority;		/* Job priority in THIS partition */
@@ -70,11 +72,12 @@ extern void main_sched_fini(void);
 
 /*
  * build_feature_list - Translate a job's feature string into a feature_list
- * IN  details->features
- * OUT details->feature_list
+ * IN  details->features|prefer
+ * OUT details->feature_list|prefer_list
+ * IN  prefer - if prefer or feature is being processed
  * RET error code
  */
-extern int build_feature_list(job_record_t *job_ptr);
+extern int build_feature_list(job_record_t *job_ptr, bool prefer);
 
 /*
  * Set up job_queue_rec->job_ptr to use a magnetic reservation if the
@@ -152,11 +155,12 @@ extern int handle_job_dependency_updates(void *object, void *arg);
  */
 extern bool job_is_completing(bitstr_t *eff_cg_bitmap);
 
-/* Determine if a pending job will run using only the specified nodes
- * (in job_desc_msg->req_nodes), build response message and return
- * SLURM_SUCCESS on success. Otherwise return an error code. Caller
- * must free response message */
-extern int job_start_data(job_desc_msg_t *job_desc_msg,
+/*
+ * Determine if a pending job will run using only the specified nodes, build
+ * response message and return SLURM_SUCCESS on success. Otherwise return an
+ * error code. Caller must free response message.
+ */
+extern int job_start_data(job_record_t *job_ptr,
 			  will_run_response_msg_t **resp);
 
 /*

@@ -73,7 +73,6 @@ pthread_mutex_t msg_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t msg_cond = PTHREAD_COND_INITIALIZER;
 allocation_msg_thread_t *msg_thr = NULL;
 struct pollfd global_fds[1];
-uint16_t slurmctld_comm_port = 0;
 
 extern char **environ;
 
@@ -469,6 +468,14 @@ relinquish:
 	return NULL;
 }
 
+static int _copy_other_port(void *x, void *arg)
+{
+	job_desc_msg_t *desc = x;
+	desc->other_port = *(uint16_t *)arg;
+
+	return SLURM_SUCCESS;
+}
+
 /*
  * Allocate nodes for heterogeneous job from the slurm controller --
  * retrying the attempt if the controller appears to be down, and optionally
@@ -536,6 +543,7 @@ List allocate_het_job_nodes(bool handle_signals)
 	/* create message thread to handle pings and such from slurmctld */
 	msg_thr = slurm_allocation_msg_thr_create(&first_job->other_port,
 						  &callbacks);
+	list_for_each(job_req_list, _copy_other_port, &first_job->other_port);
 
 	/* NOTE: Do not process signals in separate pthread. The signal will
 	 * cause slurm_allocate_resources_blocking() to exit immediately. */
@@ -688,37 +696,6 @@ extern List existing_allocation(void)
 	return job_resp_list;
 }
 
-/* Set up port to handle messages from slurmctld */
-int slurmctld_msg_init(void)
-{
-	slurm_addr_t slurm_address;
-	static int slurmctld_fd = -1;
-	uint16_t *ports;
-
-	if (slurmctld_fd >= 0)	/* May set early for queued job allocation */
-		return slurmctld_fd;
-
-	if ((ports = slurm_get_srun_port_range()))
-		slurmctld_fd = slurm_init_msg_engine_ports(ports);
-	else
-		slurmctld_fd = slurm_init_msg_engine_port(0);
-
-	if (slurmctld_fd < 0) {
-		error("slurm_init_msg_engine_port error %m");
-		exit(error_exit);
-	}
-
-	if (slurm_get_stream_addr(slurmctld_fd, &slurm_address) < 0) {
-		error("slurm_get_stream_addr error %m");
-		exit(error_exit);
-	}
-	fd_set_nonblocking(slurmctld_fd);
-	slurmctld_comm_port = slurm_get_port(&slurm_address);
-	debug2("srun PMI messages to port=%u", slurmctld_comm_port);
-
-	return slurmctld_fd;
-}
-
 /*
  * Create job description structure based off srun options
  * (see opt.h)
@@ -726,7 +703,7 @@ int slurmctld_msg_init(void)
 static job_desc_msg_t *_job_desc_msg_create_from_opts(slurm_opt_t *opt_local)
 {
 	srun_opt_t *srun_opt = opt_local->srun_opt;
-	job_desc_msg_t *j = slurm_opt_create_job_desc(opt_local);
+	job_desc_msg_t *j = slurm_opt_create_job_desc(opt_local, true);
 
 	if (!j) {
 		return NULL;
@@ -755,13 +732,6 @@ static job_desc_msg_t *_job_desc_msg_create_from_opts(slurm_opt_t *opt_local)
 		j->x11_target = xstrdup(opt.x11_target);
 		j->x11_target_port = opt.x11_target_port;
 	}
-
-	/*
-	 * srun uses the same listening port for the allocation response
-	 * message as all other messages
-	 */
-	j->alloc_resp_port = slurmctld_comm_port;
-	j->other_port = slurmctld_comm_port;
 
 	j->wait_all_nodes = 1;
 

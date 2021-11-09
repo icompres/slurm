@@ -1,8 +1,7 @@
-.TH sstat "1" "Slurm Commands" "May 2021" "Slurm Commands"
+.TH sstat "1" "Slurm Commands" "October 2021" "Slurm Commands"
 
 .SH "NAME"
-sstat \- Display various status information
-of a running job/step.
+sstat \- Display the status information of a running job/step.
 
 .SH "SYNOPSIS"
 .BR "sstat "
@@ -46,40 +45,6 @@ command is not supported on Cray ALPS.
 Print all steps for the given job(s) when no step is specified.
 
 .TP
-\f3\-e\fP\f3,\fP \f3\-\-helpformat\fP
-Print a list of fields that can be specified with the '\-\-format' option.
-
-.TP
-\f3\-h\fP\f3,\fP \f3\-\-help\fP
-Displays a general help message.
-
-.TP
-\f3\-i\fP\f3,\fP \f3\-\-pidformat\fP
-Predefined format to list the pids running for each job step.
-(JobId,Nodes,Pids)
-
-.TP
-\f3\-j\fP\f3,\fP \f3\-\-jobs\fP
-Format is <job(.step)>. Stat this job step or comma-separated list of
-job steps. This option is required.  The step portion will default to
-the lowest numbered (not batch, extern, etc) step running if not specified,
-unless the \-\-allsteps flag is set where not specifying a step will result in
-all running steps to be displayed.
-NOTE: A step id of 'batch' will display the information about the batch step.
-NOTE: A step id of 'extern' will display the information about the
-extern step.  This step is only available when using PrologFlags=contain
-
-.TP
-\f3\-n\fP\f3,\fP \f3\-\-noheader\fP
-No heading will be added to the output. The default action is to
-display a header.
-
-.TP
-\f3\-\-noconvert\fP
-Don't convert units from their original type (e.g. 2048M won't be converted to
-2G).
-
-.TP
 \f3\-o\fP\f3,\fP \f3\-\-format\fP,\fP \f3\-\-fields\fP
 Comma separated list of fields.
 (use '\-\-helpformat' for a list of available fields).
@@ -91,12 +56,46 @@ i.e. format=name%30 will print 30 characters of field name right
 justified.  A \-30 will print 30 characters left justified.
 
 .TP
+\f3\-h\fP\f3,\fP \f3\-\-help\fP
+Displays a general help message.
+
+.TP
+\f3\-e\fP\f3,\fP \f3\-\-helpformat\fP
+Print a list of fields that can be specified with the '\-\-format' option.
+
+.TP
+\f3\-j\fP\f3,\fP \f3\-\-jobs\fP
+Format is <job(.step)>. Stat this job step or comma\-separated list of
+job steps. This option is required.  The step portion will default to
+the lowest numbered (not batch, extern, etc) step running if not specified,
+unless the \-\-allsteps flag is set where not specifying a step will result in
+all running steps to be displayed.
+NOTE: A step id of 'batch' will display the information about the batch step.
+NOTE: A step id of 'extern' will display the information about the
+extern step.  This step is only available when using PrologFlags=contain
+
+.TP
+\f3\-\-noconvert\fP
+Don't convert units from their original type (e.g. 2048M won't be converted to
+2G).
+
+.TP
+\f3\-n\fP\f3,\fP \f3\-\-noheader\fP
+No heading will be added to the output. The default action is to
+display a header.
+
+.TP
 \f3\-p\fP\f3,\fP \f3\-\-parsable\fP
 output will be '|' delimited with a '|' at the end
 
 .TP
 \f3\-P\fP\f3,\fP \f3\-\-parsable2\fP
 output will be '|' delimited without a '|' at the end
+
+.TP
+\f3\-i\fP\f3,\fP \f3\-\-pidformat\fP
+Predefined format to list the pids running for each job step.
+(JobId,Nodes,Pids)
 
 .TP
 \f3\-\-usage\fP
@@ -239,13 +238,13 @@ Requested CPU frequency for the step, in kHz.
 .TP
 \f3TresUsageInAve\fP
 Tres average usage in by all tasks in job.
-NOTE: If corresponding TresUsageInMaxTask is -1 the metric is node centric
+NOTE: If corresponding TresUsageInMaxTask is \-1 the metric is node centric
 instead of task.
 
 .TP
 \f3TresUsageInMax\fP
 Tres maximum usage in by all tasks in job.
-NOTE: If corresponding TresUsageInMaxTask is -1 the metric is node centric
+NOTE: If corresponding TresUsageInMaxTask is \-1 the metric is node centric
 instead of task.
 
 .TP
@@ -259,13 +258,13 @@ Task for which each maximum TRES usage out occurred.
 .TP
 \f3TresUsageOutAve\fP
 Tres average usage out by all tasks in job.
-NOTE: If corresponding TresUsageOutMaxTask is -1 the metric is node centric
+NOTE: If corresponding TresUsageOutMaxTask is \-1 the metric is node centric
 instead of task.
 
 .TP
 \f3TresUsageOutMax\fP
 Tres maximum usage out by all tasks in job.
-NOTE: If corresponding TresUsageOutMaxTask is -1 the metric is node centric
+NOTE: If corresponding TresUsageOutMaxTask is \-1 the metric is node centric
 instead of task.
 
 .TP

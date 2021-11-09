@@ -168,7 +168,6 @@ log_options_t sched_log_opts = SCHEDLOG_OPTS_INITIALIZER;
 /* Global variables */
 bool    preempt_send_user_signal = false;
 uint16_t accounting_enforce = 0;
-int	association_based_accounting = 0;
 void *	acct_db_conn = NULL;
 int	backup_inx;
 int	batch_sched_delay = 3;
@@ -244,6 +243,7 @@ static void         _parse_commandline(int argc, char **argv);
 static void *       _purge_files_thread(void *no_data);
 static void         _remove_assoc(slurmdb_assoc_rec_t *rec);
 static void         _remove_qos(slurmdb_qos_rec_t *rec);
+static void         _restore_job_dependencies(void);
 static void         _run_primary_prog(bool primary_on);
 static void *       _service_connection(void *arg);
 static void         _set_work_dir(void);
@@ -303,7 +303,9 @@ int main(int argc, char **argv)
 			conf_file = default_slurm_config_file;
 	slurm_conf_init(conf_file);
 
+	lock_slurmctld(config_write_lock);
 	update_logging();
+	unlock_slurmctld(config_write_lock);
 
 	memset(&slurmctld_diag_stats, 0, sizeof(slurmctld_diag_stats));
 	/*
@@ -430,16 +432,13 @@ int main(int argc, char **argv)
 	 */
 	slurmscriptd_init(argc, argv);
 
-	association_based_accounting = slurm_with_slurmdbd();
 	accounting_enforce = slurm_conf.accounting_storage_enforce;
-	if (!xstrcasecmp(slurm_conf.accounting_storage_type,
-	                 "accounting_storage/slurmdbd")) {
-		with_slurmdbd = 1;
+	if (slurm_with_slurmdbd()) {
 		/* we need job_list not to be NULL */
 		init_job_conf();
 	}
 
-	if (accounting_enforce && !association_based_accounting) {
+	if (accounting_enforce && !slurm_with_slurmdbd()) {
 		accounting_enforce = 0;
 		slurm_conf.conf_flags &= (~CTL_CONF_WCKEY);
 		slurm_conf.accounting_storage_enforce = 0;
@@ -700,6 +699,8 @@ int main(int argc, char **argv)
 		 * control_host and control_port will be filled in.
 		 */
 		fed_mgr_init(acct_db_conn);
+
+		_restore_job_dependencies();
 
 		if (priority_g_init() != SLURM_SUCCESS)
 			fatal("failed to initialize priority plugin");
@@ -1030,6 +1031,7 @@ static void *_slurmctld_signal_hand(void *no_data)
 	int i, rc;
 	int sig_array[] = {SIGINT, SIGTERM, SIGHUP, SIGABRT, SIGUSR2, 0};
 	sigset_t set;
+	slurmctld_lock_t conf_write_lock = { .conf = WRITE_LOCK };
 
 #if HAVE_SYS_PRCTL_H
 	if (prctl(PR_SET_NAME, "sigmgr", NULL, NULL, NULL) < 0) {
@@ -1067,7 +1069,9 @@ static void *_slurmctld_signal_hand(void *no_data)
 			return NULL;
 		case SIGUSR2:
 			info("Logrotate signal (SIGUSR2) received");
+			lock_slurmctld(conf_write_lock);
 			update_logging();
+			unlock_slurmctld(conf_write_lock);
 			break;
 		default:
 			error("Invalid signal (%d) received", sig);
@@ -1559,7 +1563,7 @@ static int _init_tres(void)
 	slurm_addto_char_list(char_list, slurm_conf.accounting_storage_tres);
 
 	memset(&update_object, 0, sizeof(slurmdb_update_object_t));
-	if (!association_based_accounting) {
+	if (!slurm_with_slurmdbd()) {
 		update_object.type = SLURMDB_ADD_TRES;
 		update_object.objects = list_create(slurmdb_destroy_tres_rec);
 	} else if (!g_tres_count)
@@ -1637,7 +1641,7 @@ static int _init_tres(void)
 			xfree(tres_rec);
 		}
 
-		if (!association_based_accounting) {
+		if (!slurm_with_slurmdbd()) {
 			if (!tres_rec->id)
 				fatal("slurmdbd is required to run with TRES %s%s%s. Either setup slurmdbd or remove this TRES from your configuration.",
 				      tres_rec->type, tres_rec->name ? "/" : "",
@@ -1674,7 +1678,7 @@ static int _init_tres(void)
 		FREE_NULL_LIST(add_list);
 	}
 
-	if (!association_based_accounting) {
+	if (!slurm_with_slurmdbd()) {
 		assoc_mgr_update_tres(&update_object, false);
 		list_destroy(update_object.objects);
 	}
@@ -2786,14 +2790,84 @@ static void _update_cred_key(void)
 	                          slurm_conf.job_credential_private_key);
 }
 
-/* Reset slurmctld logging based upon configuration parameters
- *   uses common slurm_conf data structure
- * NOTE: READ lock_slurmctld config before entry */
+/*
+ * Update log levels given requested levels
+ * NOTE: Will not turn on originally configured off (quiet) channels
+ */
+void update_log_levels(int req_slurmctld_debug, int req_syslog_debug)
+{
+	static bool conf_init = false;
+	static int conf_slurmctld_debug, conf_syslog_debug;
+	log_options_t log_opts = LOG_OPTS_INITIALIZER;
+	int slurmctld_debug;
+	int syslog_debug;
+
+	/*
+	 * Keep track of the original debug levels from slurm.conf so that
+	 * `scontrol setdebug` does not turn on non-active logging channels.
+	 * NOTE: It is known that `scontrol reconfigure` will cause an issue
+	 *       when reconfigured with a slurm.conf that changes SlurmctldDebug
+	 *       from level QUIET to a non-quiet value.
+	 * NOTE: Planned changes to `reconfigure` behavior should make this a
+	 *       non-issue in a future release.
+	 */
+	if (!conf_init) {
+		conf_slurmctld_debug = slurm_conf.slurmctld_debug;
+		conf_syslog_debug = slurm_conf.slurmctld_syslog_debug;
+		conf_init = true;
+	}
+
+	/*
+	 * NOTE: not offset by LOG_LEVEL_INFO, since it's inconvenient
+	 * to provide negative values for scontrol
+	 */
+	slurmctld_debug = MIN(req_slurmctld_debug, (LOG_LEVEL_END - 1));
+	slurmctld_debug = MAX(slurmctld_debug, LOG_LEVEL_QUIET);
+	syslog_debug = MIN(req_syslog_debug, (LOG_LEVEL_END - 1));
+	syslog_debug = MAX(syslog_debug, LOG_LEVEL_QUIET);
+
+	if (daemonize)
+		log_opts.stderr_level = LOG_LEVEL_QUIET;
+	else
+		log_opts.stderr_level = slurmctld_debug;
+
+	if (slurm_conf.slurmctld_logfile &&
+	    (conf_slurmctld_debug != LOG_LEVEL_QUIET))
+		log_opts.logfile_level = slurmctld_debug;
+	else
+		log_opts.logfile_level = LOG_LEVEL_QUIET;
+
+	if (conf_syslog_debug == LOG_LEVEL_QUIET)
+		log_opts.syslog_level = LOG_LEVEL_QUIET;
+	else if (slurm_conf.slurmctld_syslog_debug != LOG_LEVEL_END)
+		log_opts.syslog_level = syslog_debug;
+	else if (!daemonize)
+		log_opts.syslog_level = LOG_LEVEL_QUIET;
+	else if (!slurm_conf.slurmctld_logfile &&
+		 (conf_slurmctld_debug > LOG_LEVEL_QUIET))
+		log_opts.syslog_level = slurmctld_debug;
+	else
+		log_opts.syslog_level = LOG_LEVEL_FATAL;
+
+	log_alter(log_opts, LOG_DAEMON, slurm_conf.slurmctld_logfile);
+
+	debug("slurmctld log levels: stderr=%s logfile=%s syslog=%s",
+	      log_num2string(log_opts.stderr_level),
+	      log_num2string(log_opts.logfile_level),
+	      log_num2string(log_opts.syslog_level));
+}
+
+/*
+ * Reset slurmctld logging based upon configuration parameters uses common
+ * slurm_conf data structure
+ */
 void update_logging(void)
 {
 	int rc;
 	uid_t slurm_user_id  = slurm_conf.slurm_user_id;
 	gid_t slurm_user_gid = gid_from_uid(slurm_user_id);
+
+	xassert(verify_lock(CONF_LOCK, WRITE_LOCK));
 
 	/* Preserve execute line arguments (if any) */
 	if (debug_level) {
@@ -2813,25 +2887,10 @@ void update_logging(void)
 		slurm_conf.slurmctld_logfile = xstrdup(debug_logfile);
 	}
 
-	if (daemonize)
-		log_opts.stderr_level = LOG_LEVEL_QUIET;
-	else
-		log_opts.stderr_level = slurm_conf.slurmctld_debug;
-
-	if (slurm_conf.slurmctld_syslog_debug != LOG_LEVEL_END) {
-		log_opts.syslog_level = slurm_conf.slurmctld_syslog_debug;
-	} else if (!daemonize) {
-		log_opts.syslog_level = LOG_LEVEL_QUIET;
-	} else if ((slurm_conf.slurmctld_debug > LOG_LEVEL_QUIET)
-	           && !slurm_conf.slurmctld_logfile) {
-		log_opts.syslog_level = slurm_conf.slurmctld_debug;
-	} else
-		log_opts.syslog_level = LOG_LEVEL_FATAL;
-
-	log_alter(log_opts, SYSLOG_FACILITY_DAEMON,
-	          slurm_conf.slurmctld_logfile);
-
 	log_set_timefmt(slurm_conf.log_fmt);
+
+	update_log_levels(slurm_conf.slurmctld_debug,
+			  slurm_conf.slurmctld_syslog_debug);
 
 	debug("Log file re-opened");
 
@@ -3492,6 +3551,42 @@ static void _run_primary_prog(bool primary_on)
 	wait_arg->cpid = cpid;
 	wait_arg->prog_type = xstrdup(prog_type);
 	slurm_thread_create_detached(NULL, _wait_primary_prog, wait_arg);
+}
+
+static int _init_dep_job_ptr(void *object, void *arg)
+{
+	depend_spec_t *dep_ptr = (depend_spec_t *)object;
+	dep_ptr->job_ptr = find_job_array_rec(dep_ptr->job_id,
+					      dep_ptr->array_task_id);
+	return SLURM_SUCCESS;
+}
+
+/*
+ * Restore dependency job pointers.
+ *
+ * test_job_dependency() initializes dep_ptr->job_ptr but in
+ * case a job's dependency is updated before test_job_dependency() is called,
+ * dep_ptr->job_ptr needs to be initialized for all jobs so that we can test
+ * for circular dependencies properly. Otherwise, if slurmctld is restarted,
+ * then immediately a job dependency is updated before test_job_dependency()
+ * is called, it is possible to create a circular dependency.
+ */
+static void _restore_job_dependencies(void)
+{
+	job_record_t *job_ptr;
+	ListIterator job_iterator;
+	slurmctld_lock_t job_fed_lock = {.job = WRITE_LOCK, .fed = READ_LOCK};
+
+	lock_slurmctld(job_fed_lock);
+
+	job_iterator = list_iterator_create(job_list);
+	while ((job_ptr = list_next(job_iterator))) {
+		if (job_ptr->details && job_ptr->details->depend_list)
+			list_for_each(job_ptr->details->depend_list,
+				      _init_dep_job_ptr, NULL);
+	}
+	list_iterator_destroy(job_iterator);
+	unlock_slurmctld(job_fed_lock);
 }
 
 /*

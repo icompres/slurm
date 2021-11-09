@@ -16,7 +16,9 @@ Jobs are allocated resources on a best-fit basis.
 For larger jobs, this minimizes the number of sets of consecutive nodes
 allocated to the job.</p>
 
-<a name="topo_3d"><h2>Three-dimension Topology</h2></a>
+<h2 id="topo_3d">Three-dimension Topology
+<a class="slurm_link" href="#topo_3d"></a>
+</h2>
 
 <p>Some larger computers rely upon a three-dimensional torus interconnect.
 The Cray XT and XE systems also have three-dimensional
@@ -30,7 +32,9 @@ space.
 Slurm's native best-fit algorithm is thus able to achieve a high degree
 of locality for jobs.
 
-<h2>Hierarchical Networks</h2>
+<h2 id="hierarchical">Hierarchical Networks
+<a class="slurm_link" href="#hierarchical"></a>
+</h2>
 
 <p>Slurm can also be configured to allocate resources to jobs on a
 hierarchical network to minimize network contention.
@@ -43,7 +47,7 @@ Use of this logic requires a configuration setting of
 <p>Note that slurm uses a best-fit algorithm on the currently
 available resources. This may result in an allocation with
 more that the optimum number of switches. The user can request
-a maximum number of switches for the job as well as a
+a maximum number of leaf switches for the job as well as a
 maximum time willing to wait for that number using the <i>--switches</i>
 option with the salloc, sbatch and srun commands. The parameters can
 also be changed for pending jobs using the scontrol and squeue commands.</p>
@@ -166,7 +170,7 @@ be automatically generated using the <b>opa2slurm</b> tool found here:<br>
 <a href="https://gitlab.com/jtfrey/opa2slurm">
 https://gitlab.com/jtfrey/opa2slurm</a>.</p>
 
-<h2>User Options</h2>
+<h2 id="user_opts">User Options<a class="slurm_link" href="#user_opts"></a></h2>
 
 <p>For use with the topology/tree plugin, user can also specify the maximum
 number of leaf switches to be used for their job with the maximum time the
@@ -176,7 +180,9 @@ The system administrator can limit the maximum time that any job can
 wait for this optimized configuration using the <i>SchedulerParameters</i>
 configuration parameter with the <i>max_switch_wait</i> option.</p>
 
-<h2>Environment Variables</h2>
+<h2 id="env_vars">Environment Variables
+<a class="slurm_link" href="#env_vars"></a>
+</h2>
 
 <p>If the topology/tree plugin is used, two environment variables will be set
 to describe that job's network topology. Note that these environment variables

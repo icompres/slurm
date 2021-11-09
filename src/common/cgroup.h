@@ -97,8 +97,21 @@ typedef enum {
 	CG_CTL_CNT
 } cgroup_ctl_type_t;
 
+typedef enum {
+	CG_LEVEL_ROOT,
+	CG_LEVEL_USER,
+	CG_LEVEL_JOB,
+	CG_LEVEL_STEP,
+	CG_LEVEL_TASK,
+	CG_LEVEL_SYSTEM,
+	CG_LEVEL_CNT
+} cgroup_level_t;
+
 /* This data type is used to get/set various parameters in cgroup hierarchy */
 typedef struct {
+	/* extra info */
+	stepd_step_rec_t *step;
+	uint32_t taskid;
 	/* task cpuset */
 	char *allow_cores;
 	char *allow_mems;
@@ -138,7 +151,6 @@ typedef struct {
 	char *cgroup_prepend;
 
 	bool constrain_cores;
-	bool task_affinity;
 
 	bool constrain_ram_space;
 	float allowed_ram_space;
@@ -188,24 +200,10 @@ extern int cgroup_g_step_suspend(void);
 extern int cgroup_g_step_resume(void);
 extern int cgroup_g_step_destroy(cgroup_ctl_type_t sub);
 extern bool cgroup_g_has_pid(pid_t pid);
-extern cgroup_limits_t *cgroup_g_root_constrain_get(cgroup_ctl_type_t sub);
-extern int cgroup_g_root_constrain_set(cgroup_ctl_type_t sub,
-				       cgroup_limits_t *limits);
-extern cgroup_limits_t *cgroup_g_system_constrain_get(cgroup_ctl_type_t sub);
-extern int cgroup_g_system_constrain_set(cgroup_ctl_type_t sub,
-					 cgroup_limits_t *limits);
-extern int cgroup_g_user_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits);
-extern int cgroup_g_job_constrain_set(cgroup_ctl_type_t sub,
-				      stepd_step_rec_t *job,
-				      cgroup_limits_t *limits);
-extern int cgroup_g_step_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits);
-extern int cgroup_g_task_constrain_set(cgroup_ctl_type_t sub,
-				       cgroup_limits_t *limits,
-				       uint32_t taskid);
+extern cgroup_limits_t *cgroup_g_constrain_get(cgroup_ctl_type_t sub,
+					       cgroup_level_t type);
+extern int cgroup_g_constrain_set(cgroup_ctl_type_t sub, cgroup_level_t level,
+				  cgroup_limits_t *limits);
 extern int cgroup_g_step_start_oom_mgr(void);
 extern cgroup_oom_t *cgroup_g_step_stop_oom_mgr(stepd_step_rec_t *job);
 extern int cgroup_g_task_addto(cgroup_ctl_type_t sub, stepd_step_rec_t *job,

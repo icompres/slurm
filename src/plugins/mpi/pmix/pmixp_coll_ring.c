@@ -142,9 +142,9 @@ pmixp_coll_t *pmixp_coll_ring_from_cbdata(void *cbdata)
 
 int pmixp_coll_ring_unpack(buf_t *buf, pmixp_coll_type_t *type,
 			   pmixp_coll_ring_msg_hdr_t *ring_hdr,
-			   pmixp_proc_t **r, size_t *nr)
+			   pmix_proc_t **r, size_t *nr)
 {
-	pmixp_proc_t *procs = NULL;
+	pmix_proc_t *procs = NULL;
 	uint32_t nprocs = 0;
 	uint32_t tmp;
 	int rc, i;
@@ -164,14 +164,14 @@ int pmixp_coll_ring_unpack(buf_t *buf, pmixp_coll_type_t *type,
 	}
 	*nr = nprocs;
 
-	procs = xmalloc(sizeof(pmixp_proc_t) * nprocs);
+	procs = xmalloc(sizeof(pmix_proc_t) * nprocs);
 	*r = procs;
 
 	/* 3. get namespace/rank of particular process */
 	for (i = 0; i < (int)nprocs; i++) {
 		if ((rc = unpackmem_ptr(&temp_ptr, &tmp, buf)) ||
 		    (strlcpy(procs[i].nspace, temp_ptr,
-			     PMIXP_MAX_NSLEN + 1) > PMIXP_MAX_NSLEN)) {
+			     sizeof(procs[i].nspace)) > PMIX_MAX_NSLEN)) {
 			PMIXP_ERROR("Cannot unpack namespace for process #%d",
 				    i);
 			return rc;
@@ -202,7 +202,7 @@ static int _pack_coll_ring_info(pmixp_coll_t *coll,
 				pmixp_coll_ring_msg_hdr_t *ring_hdr,
 				buf_t *buf)
 {
-	pmixp_proc_t *procs = coll->pset.procs;
+	pmix_proc_t *procs = coll->pset.procs;
 	size_t nprocs = coll->pset.nprocs;
 	uint32_t type = PMIXP_COLL_TYPE_FENCE_RING;
 	int i;
@@ -735,7 +735,7 @@ void pmixp_coll_ring_reset_if_to(pmixp_coll_t *coll, time_t ts) {
 		}
 		if (ts - coll->ts > pmixp_info_timeout()) {
 			/* respond to the libpmix */
-			pmixp_coll_localcb_nodata(coll, PMIXP_ERR_TIMEOUT);
+			pmixp_coll_localcb_nodata(coll, PMIX_ERR_TIMEOUT);
 
 			/* report the timeout event */
 			PMIXP_ERROR("%p: collective timeout seq=%d",

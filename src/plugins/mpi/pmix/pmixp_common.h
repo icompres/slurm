@@ -50,6 +50,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+/*
+ * Do not include pmix_common.h directly.  It will create a situation where
+ * symbols do not get resolved correctly.
+ */
+#include <pmix_server.h>
+
 /* Common includes for all source files
  * Define Slurm translator header first to override
  * all translated functions
@@ -187,17 +193,12 @@ typedef struct {
 	pmixp_p2p_send_complete_cb_t send_complete;
 } pmixp_p2p_data_t;
 
-#define PMIXP_MAX_NSLEN     255
-#define PMIXP_MAX_KEYLEN    511
-
-
-#define PMIXP_ERR_TIMEOUT                      -24
-#define PMIXP_ERR_BAD_PARAM                    -27
-#define PMIXP_ERR_INVALID_NAMESPACE            -44
-
-typedef struct {
-    char nspace[PMIXP_MAX_NSLEN+1];
-    uint32_t rank;
-} pmixp_proc_t;
+/*
+ * pmix_nspace_t did not exist before pmix v3 this is how it has been definied
+ * in pmix_common.h since then.
+ */
+#ifndef pmix_nspace_t
+typedef char pmix_nspace_t[PMIX_MAX_NSLEN+1];
+#endif
 
 #endif /* PMIXP_COMMON_H */

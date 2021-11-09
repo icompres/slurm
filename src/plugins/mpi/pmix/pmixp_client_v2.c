@@ -107,12 +107,13 @@ static pmix_status_t _fencenb_fn(const pmix_proc_t procs_v2[], size_t nprocs,
 	PMIXP_DEBUG("called");
 	int ret;
 	size_t i;
-	pmixp_proc_t *procs = xmalloc(sizeof(*procs) * nprocs);
+	pmix_proc_t *procs = xmalloc(sizeof(*procs) * nprocs);
 	bool collect = false;
 
 	for (i = 0; i < nprocs; i++) {
 		procs[i].rank = procs_v2[i].rank;
-		strncpy(procs[i].nspace, procs_v2[i].nspace, PMIXP_MAX_NSLEN);
+		strncpy(procs[i].nspace, procs_v2[i].nspace,
+			sizeof(procs[i].nspace));
 	}
 	/* check the info keys */
 	if (info) {

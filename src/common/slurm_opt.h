@@ -150,6 +150,7 @@ enum {
 	LONG_OPT_HET_GROUP,
 	LONG_OPT_PARSABLE,
 	LONG_OPT_POWER,
+	LONG_OPT_PREFER,
 	LONG_OPT_PRIORITY,
 	LONG_OPT_PROFILE,
 	LONG_OPT_PROLOG,
@@ -370,6 +371,7 @@ typedef struct {
 	uint64_t mem_per_gpu;		/* --mem-per-gpu		*/
 	uint64_t pn_min_memory;		/* --mem			*/
 	uint64_t pn_min_tmp_disk;	/* --tmp			*/
+	char *prefer;			/* --prefer			*/
 	char *constraint;		/* --constraint			*/
 	char *c_constraint;		/* --cluster-constraint		*/
 	char *gres;			/* --gres			*/
@@ -528,7 +530,7 @@ extern bool slurm_option_get_next_set(slurm_opt_t *opt, char **name,
 
 /*
  * Validate that conflicting optons (--hint, --ntasks-per-core,
- * --nthreads-per-core) are not used together.
+ * --nthreads-per-core, --cpu-bind [for srun]) are not used together.
  *
  */
 extern int validate_hint_option(slurm_opt_t *opt);
@@ -559,7 +561,10 @@ extern char *slurm_option_get_argv_str(const int argc, char **argv);
 
 /*
  * Return a job_desc_msg_t based on slurm_opt_t.
+ * IN set_defaults - If true, sets default values for struct members. If false,
+ *   all values will be their no value state (either NULL or NO_VAL equiv).
  */
-extern job_desc_msg_t *slurm_opt_create_job_desc(slurm_opt_t *opt_local);
+extern job_desc_msg_t *slurm_opt_create_job_desc(slurm_opt_t *opt_local,
+						 bool set_defaults);
 
 #endif	/* _SLURM_OPT_H_ */

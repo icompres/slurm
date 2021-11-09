@@ -844,7 +844,7 @@ static int _set_assoc_list(slurmctld_resv_t *resv_ptr)
 
 
 	/* no need to do this if we can't ;) */
-	if (!association_based_accounting)
+	if (!slurm_with_slurmdbd())
 		return rc;
 
 	assoc_list_allow = list_create(NULL);
@@ -4564,7 +4564,7 @@ static int _select_nodes(resv_desc_msg_t *resv_desc_ptr,
 		job_ptr->details->features = resv_desc_ptr->features;
 		/* job_ptr->job_id = 0; */
 		/* job_ptr->user_id = 0; */
-		rc = build_feature_list(job_ptr);
+		rc = build_feature_list(job_ptr, false);
 		if ((rc == SLURM_SUCCESS) &&
 		    list_find_first(job_ptr->details->feature_list,
 				    _have_xor_feature, &dummy)) {
@@ -5437,7 +5437,7 @@ extern void job_claim_resv(job_record_t *job_ptr)
 
 	resv_ptr = job_ptr->resv_ptr;
 
-	if (!resv_ptr ||
+	if (!resv_ptr || !resv_ptr->node_bitmap ||
 	    (!(resv_ptr->ctld_flags & RESV_CTLD_FULL_NODE) &&
 	     (resv_ptr->node_cnt > 1)) ||
 	    !(resv_ptr->flags & RESERVE_FLAG_REPLACE) ||
@@ -6335,7 +6335,7 @@ static int _update_resv_group_uid_access_list(void *x, void *arg)
 		(void)_set_assoc_list(resv_ptr);
 
 		/* Now see if something really did change */
-		if (!association_based_accounting ||
+		if (!slurm_with_slurmdbd() ||
 		    xstrcmp(old_assocs, resv_ptr->assoc_list))
 			*updated = 1;
 		xfree(old_assocs);
@@ -6858,7 +6858,8 @@ extern bool is_node_in_maint_reservation(int nodenum)
 		if (! (t >= resv_ptr->start_time
 		       && t <= resv_ptr->end_time))
 			continue;
-		if (bit_test(resv_ptr->node_bitmap, nodenum)) {
+		if (resv_ptr->node_bitmap &&
+		    bit_test(resv_ptr->node_bitmap, nodenum)) {
 			res = true;
 			break;
 		}
@@ -7162,4 +7163,11 @@ extern void set_reserved_license_count(licenses_t *license)
 	license->reserved = 0;
 	list_for_each(resv_list, _foreach_reservation_license_list,
 		      license);
+}
+
+extern int get_magnetic_resv_count(void)
+{
+	xassert(magnetic_resv_list);
+
+	return list_count(magnetic_resv_list);
 }

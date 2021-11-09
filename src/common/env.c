@@ -407,8 +407,6 @@ int setup_env(env_t *env, bool preserve_env)
 			str_bind1 = "sockets";
 		} else if (env->cpu_bind_type & CPU_BIND_TO_LDOMS) {
 			str_bind1 = "ldoms";
-		} else if (env->cpu_bind_type & CPU_BIND_TO_BOARDS) {
-			str_bind1 = "boards";
 		}
 
 		if (env->cpu_bind_type & CPU_BIND_NONE) {
@@ -1692,7 +1690,7 @@ void env_array_set_environment(char **env_array)
  * Unset all of the environment variables in a user's current
  * environment.
  *
- * (Note: becuae the environ array is decrementing with each
+ * (Note: because the environ array is decrementing with each
  *  unsetenv, only increment the ptr on a failure to unset.)
  */
 void env_unset_environment(void)
@@ -2028,7 +2026,7 @@ char **env_array_user_default(const char *username, int timeout, int mode,
 	else if (stat("/usr/bin/env", &buf) == 0)
 		env_loc = "/usr/bin/env";
 	else
-		fatal("Could not location command: env");
+		fatal("Could not locate command: env");
 	snprintf(cmdstr, sizeof(cmdstr),
 		 "/bin/echo; /bin/echo; /bin/echo; "
 		 "/bin/echo %s; %s; /bin/echo %s",

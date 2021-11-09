@@ -223,7 +223,6 @@ extern diag_stats_t slurmctld_diag_stats;
 extern slurmctld_config_t slurmctld_config;
 extern void *acct_db_conn;
 extern uint16_t accounting_enforce;
-extern int   association_based_accounting;
 extern int   backup_inx;		/* BackupController# index */
 extern int   batch_sched_delay;
 extern uint32_t   cluster_cpus;
@@ -559,7 +558,11 @@ struct job_details {
 	uint32_t expanding_jobid;	/* ID of job to be expanded */
 	char *extra;			/* extra field, unused */
 	List feature_list;		/* required features with node counts */
+	List feature_list_use;		/* Use these features for scheduling,
+					 * DO NOT FREE or PACK */
 	char *features;			/* required features */
+	char *features_use;		/* Use these features for scheduling,
+					 * DO NOT FREE or PACK */
 	uint32_t max_cpus;		/* maximum number of cpus */
 	uint32_t orig_max_cpus;		/* requested value of max_cpus */
 	uint32_t max_nodes;		/* maximum number of nodes */
@@ -592,6 +595,8 @@ struct job_details {
 					 * CPU | MEM_PER_CPU */
 	uint64_t orig_pn_min_memory;	/* requested value of pn_min_memory */
 	uint32_t pn_min_tmp_disk;	/* minimum tempdisk per node, MB */
+	List prefer_list;		/* soft features with node counts */
+	char *prefer;			/* soft features */
 	uint8_t prolog_running;		/* set while prolog_slurmctld is
 					 * running */
 	uint32_t reserved_resources;	/* CPU minutes of resources reserved
@@ -2473,6 +2478,14 @@ extern int update_job_wckey(char *module, job_record_t *job_ptr,
 
 /* Reset nodes_completing field for all jobs */
 extern void update_job_nodes_completing(void);
+
+/*
+ * Update log levels given requested levels
+ * IN req_slurmctld_debug - requested debug level
+ * IN req_syslog_debug - requested syslog level
+ * NOTE: Will not turn on originally configured off (quiet) channels
+ */
+extern void update_log_levels(int req_slurmctld_debug, int req_syslog_debug);
 
 /* Reset slurmctld logging based upon configuration parameters
  * uses common slurm_conf data structure */

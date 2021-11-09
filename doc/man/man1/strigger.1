@@ -1,7 +1,7 @@
-.TH strigger "1" "Slurm Commands" "May 2021" "Slurm Commands"
+.TH strigger "1" "Slurm Commands" "October 2021" "Slurm Commands"
 
 .SH "NAME"
-strigger \- Used set, get or clear Slurm trigger information.
+strigger \- Used to set, get or clear Slurm trigger information.
 
 .SH "SYNOPSIS"
 \fBstrigger \-\-set\fR   [\fIOPTIONS\fR...]
@@ -46,16 +46,8 @@ To check the value of \fISlurmUser\fR, run the command:
 
 .SH "ARGUMENTS"
 .TP
-\fB\-a\fR, \fB\-\-primary_slurmctld_failure\fR
-Trigger an event when the primary slurmctld fails.
-
-.TP
-\fB\-A\fR, \fB\-\-primary_slurmctld_resumed_operation\fR
-Trigger an event when the primary slurmctld resuming operation after failure.
-
-.TP
-\fB\-b\fR, \fB\-\-primary_slurmctld_resumed_control\fR
-Trigger an event when primary slurmctld resumes control.
+\fB\-C\fR, \fB\-\-backup_slurmctld_assumed_control\fR
+Trigger event when backup slurmctld assumes control.
 
 .TP
 \fB\-B\fR, \fB\-\-backup_slurmctld_failure\fR
@@ -64,11 +56,6 @@ Trigger an event when the backup slurmctld fails.
 .TP
 \fB\-c\fR, \fB\-\-backup_slurmctld_resumed_operation\fR
 Trigger an event when the backup slurmctld resumes operation after failure.
-
-.TP
-\fB\-C\fR, \fB\-\-backup_slurmctld_assumed_control\fR
-Trigger event when backup slurmctld assumes control.
-
 
 .TP
 \fB\-\-burst_buffer\fR
@@ -83,16 +70,17 @@ be cleared.
 Only user root or the trigger's creator can delete a trigger.
 
 .TP
+\fB\-M\fR, \fB\-\-clusters\fR=<\fIstring\fR>
+Clusters to issue commands to.
+Note that the SlurmDBD must be up for this option to work properly.
+
+.TP
 \fB\-d\fR, \fB\-\-down\fR
 Trigger an event if the specified node goes into a DOWN state.
 
 .TP
 \fB\-D\fR, \fB\-\-drained\fR
 Trigger an event if the specified node goes into a DRAINED state.
-
-.TP
-\fB\-e\fR, \fB\-\-primary_slurmctld_acct_buffer_full\fR
-Trigger an event when primary slurmctld accounting buffer is full.
 
 .TP
 \fB\-F\fR, \fB\-\-fail\fR
@@ -103,12 +91,12 @@ Trigger an event if the specified node goes into a FAILING state.
 Trigger an event when the specified job completes execution.
 
 .TP
-\fB\-\-flags\fR=\fItype\fR
+\fB\-\-flags\fR=<\fIflag\fR>
 Associate flags with the reservation. Multiple flags should be comma separated.
 Valid flags include:
 .RS
 .TP
-PERM
+\fBPERM\fR
 Make the trigger permanent. Do not purge it after the event occurs.
 .RE
 
@@ -120,37 +108,12 @@ slurmd daemon executes on front end nodes rather than the compute nodes.
 Use this option with either the \fB\-\-up\fR or \fB\-\-down\fR option.
 
 .TP
-\fB\-g\fR, \fB\-\-primary_slurmdbd_failure\fR
-Trigger an event when the primary slurmdbd fails. The trigger is launched by
-slurmctld in the occasions it tries to connect to slurmdbd, but receives no
-response on the socket.
-
-.TP
-\fB\-G\fR, \fB\-\-primary_slurmdbd_resumed_operation\fR
-Trigger an event when the primary slurmdbd resumes operation after failure.
-This event is triggered when opening the connection from slurmctld to slurmdbd
-results in a response. It can happen also in different situations, periodically
-every 15 seconds when checking the connection status, when saving state,
-when agent queue is filling, and so on.
-
-.TP
 \fB\-\-get\fP
 Show registered event triggers.
 Options can be used for filtering purposes.
 
 .TP
-\fB\-h\fR, \fB\-\-primary_database_failure\fR
-Trigger an event when the primary database fails. This event is triggered when
-the accounting plugin tries to open a connection with mysql and it fails and
-the slurmctld needs the database for some operations.
-
-.TP
-\fB\-H\fR, \fB\-\-primary_database_resumed_operation\fR
-Trigger an event when the primary database resumes operation after failure.
-It happens when the connection to mysql from the accounting plugin is restored.
-
-.TP
-\fB\-i\fR, \fB\-\-id\fR=\fIid\fR
+\fB\-i\fR, \fB\-\-id\fR=<\fIid\fR>
 Trigger ID number.
 
 .TP
@@ -161,18 +124,13 @@ option. This can be useful to hibernate a node that remains idle,
 thus reducing power consumption.
 
 .TP
-\fB\-j\fR, \fB\-\-jobid\fR=\fIid\fR
+\fB\-j\fR, \fB\-\-jobid\fR=<\fIid\fR>
 Job ID of interest.
 \fBNOTE:\fR The \fB\-\-jobid\fR option can not be used in conjunction
 with the \fB\-\-node\fR option. When the \fB\-\-jobid\fR option is
 used in conjunction with the \fB\-\-up\fR or \fB\-\-down\fR option,
 all nodes allocated to that job will considered the nodes used as a
 trigger event.
-
-.TP
-\fB\-M\fR, \fB\-\-clusters\fR=<\fIstring\fR>
-Clusters to issue commands to.
-Note that the SlurmDBD must be up for this option to work properly.
 
 .TP
 \fB\-n\fR, \fB\-\-node\fR[=\fIhost\fR]
@@ -194,7 +152,7 @@ and not "\-n tux".
 Do not print the header when displaying a list of triggers.
 
 .TP
-\fB\-o\fR, \fB\-\-offset\fR=\fIseconds\fR
+\fB\-o\fR, \fB\-\-offset\fR=<\fIseconds\fR>
 The specified action should follow the event by this time interval.
 Specify a negative value if action should preceded the event.
 The default value is zero if no \fB\-\-offset\fR option is specified.
@@ -203,7 +161,48 @@ a script not less than five minutes prior to a job reaching its
 time limit, specify \fB\-\-offset=320\fR (5 minutes plus 20 seconds).
 
 .TP
-\fB\-p\fR, \fB\-\-program\fR=\fIpath\fR
+\fB\-h\fR, \fB\-\-primary_database_failure\fR
+Trigger an event when the primary database fails. This event is triggered when
+the accounting plugin tries to open a connection with mysql and it fails and
+the slurmctld needs the database for some operations.
+
+.TP
+\fB\-H\fR, \fB\-\-primary_database_resumed_operation\fR
+Trigger an event when the primary database resumes operation after failure.
+It happens when the connection to mysql from the accounting plugin is restored.
+
+.TP
+\fB\-g\fR, \fB\-\-primary_slurmdbd_failure\fR
+Trigger an event when the primary slurmdbd fails. The trigger is launched by
+slurmctld in the occasions it tries to connect to slurmdbd, but receives no
+response on the socket.
+
+.TP
+\fB\-G\fR, \fB\-\-primary_slurmdbd_resumed_operation\fR
+Trigger an event when the primary slurmdbd resumes operation after failure.
+This event is triggered when opening the connection from slurmctld to slurmdbd
+results in a response. It can happen also in different situations, periodically
+every 15 seconds when checking the connection status, when saving state,
+when agent queue is filling, and so on.
+
+.TP
+\fB\-e\fR, \fB\-\-primary_slurmctld_acct_buffer_full\fR
+Trigger an event when primary slurmctld accounting buffer is full.
+
+.TP
+\fB\-a\fR, \fB\-\-primary_slurmctld_failure\fR
+Trigger an event when the primary slurmctld fails.
+
+.TP
+\fB\-b\fR, \fB\-\-primary_slurmctld_resumed_control\fR
+Trigger an event when primary slurmctld resumes control.
+
+.TP
+\fB\-A\fR, \fB\-\-primary_slurmctld_resumed_operation\fR
+Trigger an event when the primary slurmctld resuming operation after failure.
+
+.TP
+\fB\-p\fR, \fB\-\-program\fR=<\fIpath\fR>
 Execute the program at the specified fully qualified pathname
 when the event occurs.
 You may quote the path and include extra program arguments if desired.
@@ -242,7 +241,7 @@ Trigger an event if the specified node is returned to service
 from a DOWN state.
 
 .TP
-\fB\-\-user\fR=\fIuser_name_or_id\fR
+\fB\-\-user\fR=<\fIuser_name_or_id\fR>
 Clear or get triggers created by the specified user.
 For example, a trigger created by user \fIroot\fR for a job created by user
 \fIadam\fR could be cleared with an option \fI\-\-user=root\fR.
@@ -363,7 +362,7 @@ Execute the program "/home/joe/clean_up" when job 1234 is within \
 10 minutes of reaching its time limit.
 
 .nf
-$ strigger \-\-set \-\-jobid=1234 \-\-time \-\-offset=-600 \\
+$ strigger \-\-set \-\-jobid=1234 \-\-time \-\-offset=\-600 \\
            \-\-program=/home/joe/clean_up
 .fi
 

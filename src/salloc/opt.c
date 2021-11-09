@@ -398,7 +398,7 @@ static bool _opt_verify(void)
 	}
 
 	if (opt.burst_buffer && opt.burst_buffer_file) {
-		error("Cannot specify both --burst-buffer and --bbf");
+		error("Cannot specify both --bb and --bbf");
 		exit(error_exit);
 	} else if (opt.burst_buffer_file) {
 		buf_t *buf = create_mmap_buf(opt.burst_buffer_file);
@@ -562,6 +562,9 @@ static bool _opt_verify(void)
 			opt.ntasks *= opt.threads_per_core;
 			opt.ntasks_set = true;
 		}
+		if (opt.ntasks_set && opt.verbose)
+			info("Number of tasks implicitly set to %d",
+			     opt.ntasks);
 
 	} else if (opt.nodes_set && opt.ntasks_set) {
 		/*

@@ -1088,6 +1088,11 @@ extern int select_p_node_init(node_record_t *node_ptr, int node_cnt)
 	uint32_t cume_cores = 0;
 	int i;
 
+	if (!slurm_conf.select_type_param) {
+		info("%s SelectTypeParameters not specified, using default value: CR_Core_Memory",
+		     plugin_type);
+		slurm_conf.select_type_param = (CR_CORE | CR_MEMORY);
+	}
 	if (!(slurm_conf.select_type_param & (CR_CPU | CR_CORE | CR_SOCKET))) {
 		fatal("Invalid SelectTypeParameters: %s (%u), "
 		      "You need at least CR_(CPU|CORE|SOCKET)*",
@@ -1536,7 +1541,7 @@ extern int select_p_job_resized(job_record_t *job_ptr, node_record_t *node_ptr)
 			gres_list = node_usage[i].gres_list;
 		else
 			gres_list = node_ptr->gres_list;
-		gres_ctld_job_dealloc(job_ptr->gres_list_req, gres_list, n,
+		gres_ctld_job_dealloc(job_ptr->gres_list_alloc, gres_list, n,
 				      job_ptr->job_id, node_ptr->name,
 				      old_job, true);
 		gres_node_state_log(gres_list, node_ptr->name);

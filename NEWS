@@ -3,6 +3,195 @@ documents those changes that are of interest to users and administrators.
 
 * Changes in Slurm 22.05.0pre1
 ==============================
+ -- gres/gpu - Avoid stripping GRES type field during normalization if any
+    other GRES have a defined type field.
+ -- burst_buffer/datawarp - free bb_job after stage-out or teardown are done.
+ -- acct_gather_energy_rsmi has been renamed acct_gather_energy_gpu.
+ -- Remove support for (non-functional) --cpu-bind=boards.
+ -- accounting_storage/mysql - ensure new non-HetJobs have het_job_offset NO_VAL
+    in the database and fix the same field when retrieving older bad records.
+ -- PreemptMode now works as a condition for qos in sacctmgr.
+ -- scancel - add "--me" option.
+ -- gres/gpu - Fix configured/system-detected GRES match for some combinations
+    for which the sorting affected the expected selection result.
+ -- openapi/v0.0.38 - Fork existing openapi/v0.0.37 plugin.
+ -- openapi/dbv0.0.38 - Fork existing openapi/dbv0.0.37 plugin.
+ -- openapi/v0.0.35 - Plugin has been removed.
+ -- scrontab - Don't accept extra letters after a '@' repeating pattern.
+ -- openapi/dbv0.0.38 - Add missing method POST for /associations/.
+ -- Make DefMemPerCPU/MaxMemPerCPU and DefMemPerNode/MaxMemPerNode precedence
+    at the global level the same as in partition level, and print an error
+    if both of a pair are set.
+ -- openapi/v0.0.38 - Allow strings for JobIds instead of only numerical JobIds
+    for GET, DELETE, and POST job methods.
+ -- openapi/v0.0.38 - enable job priority field for job submissions and updates.
+ -- openapi/v0.0.38 - request node states query includes MIXED state instead of
+    only allocated.
+ -- openapi/dbv0.0.38 - Correct tree position of dbv0.0.38_job_step.
+ -- Enforce all Slurm plugin requirements for plugins specified with absolute
+    path.
+ -- Added --prefer option at job submission to allow for 'soft' constraints.
+ -- Remove support for PMIx 1.x
+
+* Changes in Slurm 21.08.4
+==========================
+ -- Fix potential deadlock when using PMI v1.
+ -- Fix tight loop sending DBD_SEND_MULT_JOB_START when the slurmctld has an
+    issue talking correctly to the DBD.
+ -- Fix memory leak in step creation.
+ -- Fix potential deadlock when shutting down slurmctld.
+
+* Changes in Slurm 21.08.3
+==========================
+ -- Return error to sacctmgr when running 'sacctmgr archive load' and the load
+    fails due to an invalid or corrupted file.
+ -- slurmctld/gres_ctld - fix deallocation of typed GRES without device.
+ -- scrontab - fix capturing the cronspec request in the job script.
+ -- openapi/dbv0.0.37 - Add missing method POST for /associations/.
+ -- If ALTER TABLE was already run, continue with database upgrade.
+ -- slurmstepd - Gracefully handle RunTimeQuery returning no output.
+ -- srun - automatically handle issues with races to listen() on an ephemeral
+    socket, and suppress otherwise needless error messages.
+ -- Schedule sooner after Epilog completion with SchedulerParameters=defer.
+ -- Improve performance for AccountingStoreFlags=job_env.
+ -- Expose missing SLURMD_NODENAME and SLURM_NODEID to TaskEpilog environment.
+ -- Bring slurm_completion.sh up to date with changes to commands.
+ -- Fix issue where burst buffer stage-in could only start for one job in a job
+    array per scheduling cycle instead of bb_array_stage_cnt jobs per scheduling
+    cycle.
+ -- Fix checking if the dependency is the same job for array jobs.
+ -- Fix checking for circular dependencies with job arrays.
+ -- Restore dependent job pointers on slurmctld startup to avoid race.
+ -- openapi/v0.0.37 - Allow strings for JobIds instead of only numerical JobIds
+    for GET, DELETE, and POST job methods.
+ -- openapi/dbv0.0.36 - Gracefully handle missing associations.
+ -- openapi/dbv0.0.36 - Avoid restricting job association lookups to only
+    default associations.
+ -- openapi/dbv0.0.37 - Gracefully handle missing associations.
+ -- openapi/dbv0.0.37 - Avoid restricting job association lookups to only
+    default associations.
+ -- Fix error in GPU frequency validation logic.
+ -- Fix regression in 21.08.1 that broke federated jobs.
+ -- Correctly handle requested GRES when used in job arrays.
+ -- Fix error in pmix logic dealing with the incorrect size of buffer.
+ -- Fix handling of no_consume GRES, add it to allocated job allocated TRES.
+ -- Fix issue with typed GRES without Files= (bitmap).
+ -- Fix job_submit/lua support for 'gres' which is now stored as a 'tres'
+    when requesting jobs so needs a 'gres' prefix.
+ -- Fix regression where MPS would not deallocate from the node properly.
+ -- Fix --gpu-bind=verbose to work correctly.
+ -- Do not deny --constraint with special operators "[]()|*" when no changeable
+    features are requested, but continue to deny --constraint with special
+    operators when changeable features are requested.
+ -- openapi/v0.0.{35,36,37} - prevent merging the slurmrestd environment
+    alongside a new job submission.
+ -- openapi/dbv0.0.36 - Correct tree position of dbv0.0.36_job_step.
+ -- openapi/dbv0.0.37 - Correct tree position of dbv0.0.37_job_step.
+ -- openapi/v0.0.37 - enable job priority field for job submissions and updates.
+ -- openapi/v0.0.37 - request node states query includes MIXED state instead of
+    only allocated.
+ -- mpi/pmix - avoid job hanging until the time limit on PMIx agent failures.
+ -- Correct inverted logic where reduced version matching applied to non-SPANK
+    plugins where it should have only applied to SPANK plugins.
+ -- Fix issues where prologs would run in serial without PrologFlags=serial.
+ -- Make sure a job coming in is initially considered for magnetic reservations.
+ -- PMIx v1.1.4 and below are no longer supported.
+ -- Add comment to service files about disabling logging through journald.
+ -- Add SLURM_NODE_ALIASES env to RPC Prolog (PrologFlags=alloc) environment.
+ -- Limit max_script_size to 512 MB.
+ -- Fix shutdown of slurmdbd plugin to correctly notice when the agent thread
+    finishes.
+ -- slurmdbd - fix issue with larger batch script files being sent to SlurmDBD
+    with AccountingStoreFlags=job_script that can lead to accounting data loss
+    as the resulting RPC generated can exceed internal limits and won't be
+    sent, preventing further communication with SlurmDBD.
+    This issue is indicated by "error: Invalid msg_size" in your log files.
+ -- Fix compile issue with --without-shared-libslurm.
+
+* Changes in Slurm 21.08.2
+==========================
+ -- slurmctld - fix how the max number of cores on a node in a partition are
+    calculated when the partition contains multi-socket nodes. This in turn
+    corrects certain jobs node count estimations displayed client-side.
+ -- job_submit/cray_aries - fix "craynetwork" GRES specification after changes
+    introduced in 21.08.0rc1 that made TRES always have a type prefix.
+ -- Ignore nonsensical check in the slurmd for [Pro|Epi]logSlurmctld.
+ -- Fix writing to stderr/syslog when systemd runs slurmctld in the foreground.
+ -- Fix locking around log level setting routines.
+ -- Fix issue with updating job started with node range.
+ -- Fix issue with nodes not clearing state in the database when the slurmctld
+    is started with clean-start.
+ -- Fix hetjob components > 1 timing out due to InactiveLimit.
+ -- Fix sprio printing -nan for normalized association priority if
+    PriorityWeightAssoc was not defined.
+ -- Disallow FirstJobId=0.
+ -- Preserve job start info in the database for a requeued job that hadn't
+    registered the first time in the database yet.
+ -- Only send one message on prolog failure from the slurmd.
+ -- Remove support for TaskAffinity=yes in cgroup.conf.
+ -- accounting_storage/mysql - fix issue where querying jobs via sacct
+    --whole-hetjob=yes or slurmrestd (which automatically includes this flag)
+    could in some cases return more records than expected.
+ -- Fix issue for preemption of job array task that makes afterok dependency
+    fail. Additionally, send emails when requeueing happens due to preemption.
+ -- Fix sending requeue mail type.
+ -- Properly resize a job's GRES bitmaps and counts when resizing the job.
+ -- Fix node being able to transition to CLOUD state from non-cloud state.
+ -- Fix regression introduced in 21.08.0rc1 which broke a step's ability to
+    inherit GRES from the job when the step didn't request GRES but the job did.
+ -- Fix errors in logic when picking nodes based on bracketed anded constraints.
+    This also enforces the requirement to have a count when using such
+    constraints.
+ -- Handle job resize better in the database.
+ -- Exclude currently running, resized jobs from the runaway jobs list.
+ -- Make it possible to shrink a job more than once.
+
+* Changes in Slurm 21.08.1
+==========================
+ -- Fix potential memory leak if a problem happens while allocating GRES for
+    a job.
+ -- If an overallocation of GRES happens terminate the creation of a job.
+ -- AutoDetect=nvml: Fatal if no devices found in MIG mode.
+ -- slurm.spec - fix querying for PMIx and UCX version.
+ -- Print federation and cluster sacctmgr error messages to stderr.
+ -- Fix off by one error in --gpu-bind=mask_gpu.
+ -- Fix statement condition in http_parser autoconf macro.
+ -- Fix statement condition in netloc autoconf macro.
+ -- Add --gpu-bind=none to disable gpu binding when using --gpus-per-task.
+ -- Handle the burst buffer state "alloc-revoke" which previously would not
+    display in the job correctly.
+ -- Fix issue in the slurmstepd SPANK prolog/epilog handler where configuration
+    values were used before being initialized.
+ -- Restore a step's ability to utilize all of an allocations memory if --mem=0.
+ -- Fix --cpu-bind=verbose garbage taskid.
+ -- Fix cgroup task affinity issues from garbage taskid info.
+ -- Make gres_job_state_validate() client logging behavior as before 44466a4641.
+ -- Fix steps with --hint overriding an allocation with --threads-per-core.
+ -- Require requesting a GPU if --mem-per-gpu is requested.
+ -- Return error early if a job is requesting --ntasks-per-gpu and no gpus or
+    task count.
+ -- Properly clear out pending step if unavailable to run with available
+    resources.
+ -- Kill all processes spawned by burst_buffer.lua including decendents.
+ -- openapi/v0.0.{35,36,37} - Avoid setting default values of min_cpus,
+    job name, cwd, mail_type, and contiguous on job update.
+ -- openapi/v0.0.{35,36,37} - Clear user hold on job update if hold=false.
+ -- Prevent CRON_JOB flag from being cleared when loading job state.
+ -- sacctmgr - Fix deleting WCKeys when not specifying a cluster.
+ -- Fix getting memory for a step when the first node in the step isn't the
+    first node in the allocation.
+ -- Make SelectTypeParameters=CR_Core_Memory default for cons_tres and cons_res.
+ -- Correctly handle mutex unlocks in the gres code if failures happen.
+ -- Give better error message if -m plane is given with no size.
+ -- Fix --distribution=arbitrary for salloc.
+ -- Fix jobcomp/script regression introduced in 21.08.0rc1 0c75b9ac9d.
+ -- Only send the batch node in the step_hostlist in the job credential.
+ -- When setting affinity for the batch step don't assume the batch host is node
+    0.
+ -- In task/affinity better checking for node existence when laying out
+    affinity.
+ -- slurmrestd - fix job submission with auth/jwt.
+ -- Fix 'scontrol setdebug' not respecting slurm.conf logging configurations.
 
 * Changes in Slurm 21.08.0
 ==========================
@@ -51,6 +240,7 @@ documents those changes that are of interest to users and administrators.
  -- Limit the wait time in proctrack_g_wait() to UnkillableStepTimeout instead
     of a hardcoded value of 256 seconds, and limit the delay between tests to a
     maximum of 32 seconds.
+ -- fatal() on start if using job_container/tmpfs without PrologFlags=Contian.
 
 * Changes in Slurm 21.08.0rc2
 =============================
@@ -289,6 +479,18 @@ documents those changes that are of interest to users and administrators.
  -- openapi/v0.0.36 - Honor kill_on_invalid_dependency as job parameter.
  -- Fix various issues dealing with updates on magnetic reservations that could
     lead to abort slurmctld.
+ -- openapi/v0.0.36 - Avoid setting default values of min_cpus, job name, cwd,
+    mail_type, and contiguous on job update.
+ -- openapi/v0.0.36 - Clear user hold on job update if hold=false.
+ -- Fix slurmctld segfault due to a bit_test() call with a MAINT+ANY_NODES
+    reservation NULL node_bitmap.
+ -- Fix slurmctld segfault due to a bit_copy() call with a REPLACE+ANY_NODES
+    reservation NULL node_bitmap.
+ -- Fix error in GPU frequency validation logic.
+ -- Fix error in pmix logic dealing with the incorrect size of buffer.
+ -- PMIx v1.1.4 and below are no longer supported.
+ -- Fix shutdown of slurmdbd plugin to correctly notice when the agent thread
+    finishes.
 
 * Changes in Slurm 20.11.8
 ==========================

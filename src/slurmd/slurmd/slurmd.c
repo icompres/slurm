@@ -924,6 +924,7 @@ _read_config(void)
 		conf->port = cf->slurmd_port;
 	else
 		conf->port = slurm_conf_get_port(conf->node_name);
+	slurm_conf.slurmd_port = conf->port;
 	slurm_conf_get_cpus_bsct(conf->node_name,
 				 &conf->conf_cpus, &conf->conf_boards,
 				 &conf->conf_sockets, &conf->conf_cores,
@@ -1749,7 +1750,7 @@ _slurmd_init(void)
 	}
 
 	/* Set up the hwloc whole system xml file */
-	if (xcpuinfo_init() != XCPUINFO_SUCCESS)
+	if (xcpuinfo_init() != SLURM_SUCCESS)
 		return SLURM_ERROR;
 
 	fini_job_cnt = cpu_cnt = MAX(conf->conf_cpus, conf->block_map_size);
@@ -2568,7 +2569,7 @@ static int _validate_and_convert_cpu_list(void)
 	bit_fmt(res_abs_cpus, sizeof(res_abs_cpus), res_cpu_bitmap);
 	/* create output machine CPU list from core list */
 	if (xcpuinfo_abs_to_mac(res_abs_cores, &res_mac_cpus)
-		   != XCPUINFO_SUCCESS)
+		   != SLURM_SUCCESS)
 		return SLURM_ERROR;
 	return SLURM_SUCCESS;
 }

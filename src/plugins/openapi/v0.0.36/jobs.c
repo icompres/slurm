@@ -348,24 +348,22 @@ static int _fill_job_desc_from_opts(slurm_opt_t *opt, job_desc_msg_t *desc)
 
 	desc->wait_all_nodes = sbopt->wait_all_nodes;
 
-	desc->environment = NULL;
+	env_array_free(desc->environment);
+	desc->environment = env_array_copy((const char **) opt->environment);
+
 	if (sbopt->export_file) {
-		desc->environment = env_array_from_file(sbopt->export_file);
-		if (desc->environment == NULL)
-			exit(1);
+		error("%s: rejecting request to use load environment from file: %s",
+		      __func__, sbopt->export_file);
+		return -1;
 	}
-	if (opt->export_env == NULL) {
-		env_array_merge(&desc->environment, (const char **) environ);
-	} else if (!xstrcasecmp(opt->export_env, "ALL")) {
-		env_array_merge(&desc->environment, (const char **) environ);
-	} else if (!xstrcasecmp(opt->export_env, "NONE")) {
-		desc->environment = env_array_create();
-		env_array_merge_slurm(&desc->environment,
-				      (const char **)environ);
-		opt->get_user_env_time = 0;
-	} else {
-		env_merge_filter(opt, desc);
-		opt->get_user_env_time = 0;
+	if (opt->export_env) {
+		/*
+		 * job environment is loaded directly via data_t list and not
+		 * via the --export command.
+		 */
+		error("%s: rejecting request to control export environment: %s",
+		      __func__, opt->export_env);
+		return -1;
 	}
 	if (opt->get_user_env_time >= 0) {
 		env_array_overwrite(&desc->environment,
@@ -380,6 +378,10 @@ static int _fill_job_desc_from_opts(slurm_opt_t *opt, job_desc_msg_t *desc)
 	}
 
 	desc->env_size = envcount(desc->environment);
+
+	/* Disable sending uid/gid as it is handled by auth layer */
+	desc->user_id = NO_VAL;
+	desc->group_id = NO_VAL;
 
 	desc->argc     = sbopt->script_argc;
 	desc->argv     = sbopt->script_argv;
@@ -417,7 +419,7 @@ static job_desc_msg_t *_parse_job_desc(const data_t *job, data_t *errors,
 		goto cleanup;
 	}
 
-	req = slurm_opt_create_job_desc(&opt);
+	req = slurm_opt_create_job_desc(&opt, !update_only);
 	if (!update_only)
 		req->task_dist = SLURM_DIST_UNKNOWN;
 

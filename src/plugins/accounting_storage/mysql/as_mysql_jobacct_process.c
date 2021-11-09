@@ -314,12 +314,12 @@ static void _setup_job_cond_selected_steps(slurmdb_job_cond_t *job_cond,
 		if (job_ids) {
 			if (job_cond->flags & JOBCOND_FLAG_WHOLE_HETJOB)
 				xstrfmtcat(*extra, "t1.id_job in (%s) || "
-					   "(t1.het_job_offset<>%u && "
 					   "t1.het_job_id in (select "
 					   "t4.het_job_id from \"%s_%s\" as "
-					   "t4 where t4.id_job in (%s)))",
-					   job_ids, NO_VAL, cluster_name,
-					   job_table, job_ids);
+					   "t4 where t4.id_job in (%s) && "
+					   "t4.het_job_id)",
+					   job_ids, cluster_name, job_table,
+					   job_ids);
 			else if (job_cond->flags & JOBCOND_FLAG_NO_WHOLE_HETJOB)
 				xstrfmtcat(*extra, "t1.id_job in (%s)",
 					   job_ids);
@@ -663,6 +663,14 @@ static int _cluster_get_jobs(mysql_conn_t *mysql_conn,
 		 * array_task_id would be 0 instead of it's real value */
 		if (!job->array_job_id && !job->array_task_id)
 			job->array_task_id = NO_VAL;
+
+		/*
+		 * This shouldn't happen with new jobs.
+		 * If older jobs have het_job_id == 0 and het_job_offset == 0,
+		 * then correct het_job_offset to be NO_VAL.
+		 */
+		if (!job->het_job_id && !job->het_job_offset)
+			job->het_job_offset = NO_VAL;
 
 		if (row[JOB_REQ_RESV_NAME] && row[JOB_REQ_RESV_NAME][0])
 			job->resv_name = xstrdup(row[JOB_REQ_RESV_NAME]);

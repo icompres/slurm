@@ -334,10 +334,22 @@ extern uint16_t slurm_get_track_wckey(void)
  */
 bool slurm_with_slurmdbd(void)
 {
-	bool with_slurmdbd;
-	slurm_conf_t *conf = slurm_conf_lock();
+	static bool with_slurmdbd = false;
+	static bool is_set = false;
+	slurm_conf_t *conf;
+
+	/*
+	 * Since accounting_storage_type is a plugin and plugins can't change
+	 * on reconfigure, we don't need to worry about reconfigure with this
+	 * static variable.
+	 */
+	if (is_set)
+		return with_slurmdbd;
+
+	conf = slurm_conf_lock();
 	with_slurmdbd = !xstrcasecmp(conf->accounting_storage_type,
 	                             "accounting_storage/slurmdbd");
+	is_set = true;
 	slurm_conf_unlock();
 	return with_slurmdbd;
 }
@@ -675,15 +687,18 @@ int slurm_init_msg_engine_port(uint16_t port)
 	int i;
 
 	slurm_setup_addr(&addr, port);
-	cc = slurm_init_msg_engine(&addr);
+	cc = slurm_init_msg_engine(&addr, (port == 0));
 	if ((cc < 0) && (port == 0) && (errno == EADDRINUSE)) {
 		/* All ephemeral ports are in use, test other ports */
 		for (i = 10001; i < 65536; i++) {
 			slurm_set_port(&addr, i);
-			cc = slurm_init_msg_engine(&addr);
+			cc = slurm_init_msg_engine(&addr, true);
 			if (cc >= 0)
 				break;
 		}
+		if (cc < 0)
+			error("%s: all ephemeral ports, and the range (10001, 65536) are exhausted, cannot establish listening port",
+			      __func__);
 	}
 	return cc;
 }
@@ -711,17 +726,8 @@ int slurm_init_msg_engine_ports(uint16_t *ports)
 		return -1;
 	}
 
-	port = sock_bind_range(s, ports, false);
-	if (port < 0) {
-		close(s);
+	if ((port = sock_bind_listen_range(s, ports, false)) < 0)
 		return -1;
-	}
-
-	cc = listen(s, SLURM_DEFAULT_LISTEN_BACKLOG);
-	if (cc < 0) {
-		close(s);
-		return -1;
-	}
 
 	return s;
 }
@@ -1605,7 +1611,7 @@ int slurm_send_node_msg(int fd, slurm_msg_t * msg)
 		}
 	}
 	if (auth_cred == NULL) {
-		error("%s: auth_g_create: %s has authentication error: %m",
+		error("%s: auth_g_create: %s has authentication error",
 		      __func__, rpc_num2string(msg->msg_type));
 		slurm_seterrno_ret(SLURM_PROTOCOL_AUTHENTICATION_ERROR);
 	}
@@ -2863,14 +2869,14 @@ extern void slurm_setup_addr(slurm_addr_t *sin, uint16_t port)
 }
 
 /*
- * Check if we can bind() the socket s to port port.
+ * bind() and then listen() to any port in a given range of ports
  *
  * IN: s - socket
  * IN: port - port number to attempt to bind
  * IN: local - only bind to localhost if true
  * OUT: true/false if port was bound successfully
  */
-int sock_bind_range(int s, uint16_t *range, bool local)
+extern int sock_bind_listen_range(int s, uint16_t *range, bool local)
 {
 	uint32_t count;
 	uint32_t min;
@@ -2887,7 +2893,8 @@ int sock_bind_range(int s, uint16_t *range, bool local)
 	count = num;
 
 	do {
-		if (_is_port_ok(s, port, local))
+		if ((_is_port_ok(s, port, local)) &&
+		    (!listen(s, SLURM_DEFAULT_LISTEN_BACKLOG)))
 			return port;
 
 		if (port == max)
@@ -2897,6 +2904,7 @@ int sock_bind_range(int s, uint16_t *range, bool local)
 		--count;
 	} while (count > 0);
 
+	close(s);
 	error("%s: all ports in range (%u, %u) exhausted, cannot establish listening port",
 	      __func__, min, max);
 

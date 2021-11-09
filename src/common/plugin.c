@@ -97,74 +97,82 @@ const char * plugin_strerror(plugin_err_t e)
 	return ("Unknown error");
 }
 
-int
-plugin_peek( const char *fq_path,
-			 char *plugin_type,
-			 const size_t type_len,
-			 uint32_t *plugin_version )
+static int _verify_syms(plugin_handle_t plug, char *plugin_type,
+			const size_t type_len, const char *caller,
+			const char *fq_path)
 {
-	plugin_handle_t plug;
-	char *type;
+	char *type, *name;
 	uint32_t *version;
 	uint32_t mask = 0xffffff;
 
-	plug = dlopen( fq_path, RTLD_LAZY );
-	if ( plug == NULL ) {
-		debug3( "plugin_peek: dlopen(%s): %s", fq_path, _dlerror() );
-		return SLURM_ERROR;
+	if (!(name = dlsym(plug, PLUGIN_NAME))) {
+		verbose("%s: %s is not a Slurm plugin: %s",
+			caller, fq_path, _dlerror());
+		return EPLUGIN_MISSING_NAME;
 	}
-	if ( ( type = dlsym( plug, PLUGIN_TYPE ) ) != NULL ) {
-		if ( plugin_type != NULL ) {
-			strlcpy(plugin_type, type, type_len);
-		}
-	} else {
-		dlclose( plug );
-		/* could be vestigial library, don't treat as an error */
-		verbose( "%s: not a Slurm plugin", fq_path );
-		return SLURM_ERROR;
+
+	if (!(type = dlsym(plug, PLUGIN_TYPE))) {
+		verbose("%s: %s is not a Slurm plugin: %s",
+			caller, fq_path, _dlerror());
+		return ESLURM_PLUGIN_INVALID;
 	}
+
+	if (plugin_type) {
+		strlcpy(plugin_type, type, type_len);
+	}
+
+	version = dlsym(plug, PLUGIN_VERSION);
+	if (!version) {
+		verbose("%s: %s symbol not found in %s: %s",
+			caller, PLUGIN_VERSION, fq_path, _dlerror());
+		return ESLURM_PLUGIN_INVALID;
+	}
+
+	debug3("%s->%s: found Slurm plugin name:%s type:%s version:0x%x",
+	       caller, __func__, name, type, *version);
 
 	/* SPANK plugins need to only match major and minor */
-	if (xstrcmp(type, "spank"))
+	if (!xstrcmp(type, "spank"))
 		mask = 0xffff00;
 
-	version = (uint32_t *) dlsym(plug, PLUGIN_VERSION);
-	if (!version) {
-		verbose("%s: plugin_version symbol not defined", fq_path);
-	} else if ((*version & mask) != (SLURM_VERSION_NUMBER & mask)) {
+	if ((*version & mask) != (SLURM_VERSION_NUMBER & mask)) {
 		int plugin_major, plugin_minor, plugin_micro;
 		plugin_major = SLURM_VERSION_MAJOR(*version);
 		plugin_minor = SLURM_VERSION_MINOR(*version);
 		plugin_micro = SLURM_VERSION_MICRO(*version);
-		dlclose(plug);
-		info("%s: Incompatible Slurm plugin version (%d.%02d.%d)",
-		     fq_path, plugin_major, plugin_minor, plugin_micro);
+
+		info("%s: Incompatible Slurm plugin %s version (%d.%02d.%d)",
+		     caller, fq_path, plugin_major, plugin_minor, plugin_micro);
+		return ESLURM_PLUGIN_INVALID;
+	}
+
+	return SLURM_SUCCESS;
+}
+
+extern int plugin_peek(const char *fq_path, char *plugin_type,
+		       const size_t type_len, uint32_t *plugin_version)
+{
+	int rc;
+	plugin_handle_t plug;
+
+	if (!(plug = dlopen(fq_path, RTLD_LAZY))) {
+		debug3("%s: dlopen(%s): %s", __func__, fq_path, _dlerror());
 		return SLURM_ERROR;
 	}
 
-	dlclose( plug );
-	return SLURM_SUCCESS;
+	rc = _verify_syms(plug, plugin_type, type_len, __func__, fq_path);
+	dlclose(plug);
+	return rc;
 }
 
 plugin_err_t
 plugin_load_from_file(plugin_handle_t *p, const char *fq_path)
 {
+	int rc;
 	plugin_handle_t plug;
 	int (*init)(void);
-	uint32_t *version;
-	char *type = NULL;
 
 	*p = PLUGIN_INVALID_HANDLE;
-
-	/*
-	 *  Check for file existence and access permissions
-	 */
-	if (access(fq_path, R_OK) < 0) {
-		if (errno == ENOENT)
-			return EPLUGIN_NOTFOUND;
-		else
-			return EPLUGIN_ACCESS_ERROR;
-	}
 
 	/*
 	 * Try to open the shared object.
@@ -184,25 +192,9 @@ plugin_load_from_file(plugin_handle_t *p, const char *fq_path)
 		return EPLUGIN_DLOPEN_FAILED;
 	}
 
-	/* Now see if our required symbols are defined. */
-	if ((dlsym(plug, PLUGIN_NAME) == NULL) ||
-	    ((type = dlsym(plug, PLUGIN_TYPE)) == NULL)) {
+	if ((rc = _verify_syms(plug, NULL, 0, __func__, fq_path))) {
 		dlclose(plug);
-		return EPLUGIN_MISSING_NAME;
-	}
-
-	version = (uint32_t *) dlsym(plug, PLUGIN_VERSION);
-	if (!version) {
-		verbose("%s: plugin_version symbol not defined", fq_path);
-	} else if ((*version != SLURM_VERSION_NUMBER) && xstrcmp(type,"spank")){
-		int plugin_major, plugin_minor, plugin_micro;
-		plugin_major = SLURM_VERSION_MAJOR(*version);
-		plugin_minor = SLURM_VERSION_MINOR(*version);
-		plugin_micro = SLURM_VERSION_MICRO(*version);
-		dlclose(plug);
-		info("%s: Incompatible Slurm plugin version (%d.%02d.%d)",
-		     fq_path, plugin_major, plugin_minor, plugin_micro);
-		return EPLUGIN_BAD_VERSION;
+		return rc;
 	}
 
 	/*

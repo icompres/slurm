@@ -63,6 +63,13 @@
 #define PMIXP_INFO_ARRAY_SET_ARRAY(kvp, _array) \
 	{ (kvp)->value.data.array.array = (pmix_info_t *)_array; }
 
+/* Check PMIx version */
+#if (HAVE_PMIX_VER != PMIX_VERSION_MAJOR)
+#define VALUE_TO_STRING(x) #x
+#define VALUE(x) VALUE_TO_STRING(x)
+#pragma message "PMIx version mismatch: the major version seen during configuration was " VALUE(HAVE_PMIX_VER) "L but found " VALUE(PMIX_VERSION_MAJOR) " compilation will most likely fail.  Please reconfigure against the new version."
+#endif
+
 #define PMIXP_INFO_ARRAY_CREATE(kvp, _array, _count)			\
 {									\
 	(kvp)->value.type = PMIX_DATA_ARRAY;				\
@@ -534,13 +541,13 @@ extern void pmixp_lib_modex_invoke(void *mdx_fn, int status,
 		case SLURM_SUCCESS:
 			rc = PMIX_SUCCESS;
 			break;
-		case PMIXP_ERR_INVALID_NAMESPACE:
+		case PMIX_ERR_INVALID_NAMESPACE:
 			rc = PMIX_ERR_INVALID_NAMESPACE;
 			break;
-		case PMIXP_ERR_BAD_PARAM:
+		case PMIX_ERR_BAD_PARAM:
 			rc = PMIX_ERR_BAD_PARAM;
 			break;
-		case PMIXP_ERR_TIMEOUT:
+		case PMIX_ERR_TIMEOUT:
 			rc = PMIX_ERR_TIMEOUT;
 			break;
 		default:
@@ -557,7 +564,7 @@ extern void pmixp_lib_release_invoke(void *rel_fn, void *rel_data)
 }
 
 extern int pmixp_lib_dmodex_request(
-	pmixp_proc_t *proc, void *dmdx_fn, void *caddy)
+	pmix_proc_t *proc, void *dmdx_fn, void *caddy)
 {
 	pmix_status_t rc;
 	pmix_proc_t proc_v1;
@@ -720,7 +727,7 @@ extern int pmixp_libpmix_job_set(void)
 	return ret;
 }
 
-extern int pmixp_lib_fence(const pmixp_proc_t procs[], size_t nprocs,
+extern int pmixp_lib_fence(const pmix_proc_t procs[], size_t nprocs,
 			   bool collect, char *data, size_t ndata,
 			   void *cbfunc, void *cbdata)
 {

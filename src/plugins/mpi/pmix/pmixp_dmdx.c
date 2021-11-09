@@ -53,7 +53,7 @@ typedef struct {
 	time_t ts;
 #ifndef NDEBUG
 	/* we need this only for verification */
-	char nspace[PMIXP_MAX_NSLEN];
+	pmix_nspace_t nspace;
 	int rank;
 #endif
 	void *cbfunc;
@@ -62,7 +62,7 @@ typedef struct {
 
 typedef struct {
 	uint32_t seq_num;
-	pmixp_proc_t proc;
+	pmix_proc_t proc;
 	char *sender_ns;
 	int sender_nodeid;
 	int rank;
@@ -232,7 +232,7 @@ static void _dmdx_pmix_cb(int status, char *data, size_t sz,
 	_dmdx_free_caddy(caddy);
 }
 
-int pmixp_dmdx_get(const char *nspace, int rank,
+int pmixp_dmdx_get(const pmix_nspace_t nspace, int rank,
 		   void *cbfunc, void *cbdata)
 {
 	dmdx_req_info_t *req;
@@ -259,7 +259,7 @@ int pmixp_dmdx_get(const char *nspace, int rank,
 	req->cbdata = cbdata;
 	req->ts = time(NULL);
 #ifndef NDEBUG
-	strncpy(req->nspace, nspace, PMIXP_MAX_NSLEN);
+	strncpy(req->nspace, nspace, sizeof(req->nspace));
 	req->rank = rank;
 #endif
 	list_append(_dmdx_requests, req);
@@ -308,7 +308,7 @@ static void _dmdx_req(buf_t *buf, int nodeid, uint32_t seq_num)
 		PMIXP_ERROR("Bad request from %s: asked for nspace = %s, mine is %s",
 			    nodename, ns, pmixp_info_namespace());
 		_respond_with_error(seq_num, nodeid, sender_ns,
-				    PMIXP_ERR_INVALID_NAMESPACE);
+				    PMIX_ERR_INVALID_NAMESPACE);
 		xfree(nodename);
 		goto exit;
 	}
@@ -319,7 +319,7 @@ static void _dmdx_req(buf_t *buf, int nodeid, uint32_t seq_num)
 		PMIXP_ERROR("Bad request from %s: nspace \"%s\" has only %d ranks, asked for %d",
 			    nodename, ns, nsptr->ntasks, rank);
 		_respond_with_error(seq_num, nodeid, sender_ns,
-				    PMIXP_ERR_BAD_PARAM);
+				    PMIX_ERR_BAD_PARAM);
 		xfree(nodename);
 		goto exit;
 	}
@@ -329,7 +329,7 @@ static void _dmdx_req(buf_t *buf, int nodeid, uint32_t seq_num)
 	caddy->seq_num = seq_num;
 
 	/* ns is a pointer inside incoming buffer */
-	strncpy(caddy->proc.nspace, ns, PMIXP_MAX_NSLEN);
+	strncpy(caddy->proc.nspace, ns, sizeof(caddy->proc.nspace));
 	ns = NULL; /* protect the data */
 	caddy->proc.rank = rank;
 

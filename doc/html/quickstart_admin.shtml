@@ -1,7 +1,7 @@
 <!--#include virtual="header.txt"-->
 
 <h1>Quick Start Administrator Guide</h1>
-<h2>Overview</h2>
+<h2 id="overview">Overview<a class="slurm_link" href="#overview"></a></h2>
 <p>Please see the <a href="quickstart.html">Quick Start User Guide</a> for a
 general overview.</p>
 
@@ -11,7 +11,9 @@ computer platforms.</p>
 <p>This document also includes a section specifically describing how to
 perform <a href="#upgrade">upgrades</a>.</p>
 
-<h2>Super Quick Start</h2>
+<h2 id="quick_start">Super Quick Start
+<a class="slurm_link" href="#quick_start"></a>
+</h2>
 <ol>
 <li>Make sure the clocks, users and groups (UIDs and GIDs) are synchronized
 across the cluster.</li>
@@ -53,22 +55,23 @@ NOTE: You will need to install this configuration file on all nodes of the clust
 </ul></li>
 <li>Start the <i>slurmctld</i> and <i>slurmd</i> daemons.</li>
 </ol>
-<p>NOTE: Items 3 through 8 can be replaced with
+<p>NOTE: Items 3 through 8 can be replaced with</p>
 <ol>
 <li><code>rpmbuild -ta slurm*.tar.bz2</code></li>
 <li><code>rpm --install &lt;the rpm files&gt;</code></li>
 </ol>
-</p>
 
 <p>FreeBSD administrators should see the <a href="#FreeBSD">FreeBSD</a> section below.</p>
 
-<h2>Building and Installing Slurm</h2>
+<h2 id="build_install">Building and Installing Slurm
+<a class="slurm_link" href="#build_install"></a>
+</h2>
 
 <p>Instructions to build and install Slurm manually are shown below.
 See the README and INSTALL files in the source distribution for more details.
 </p>
 <ol>
-<li>Unpack the distributed tarball:</br>
+<li>Unpack the distributed tarball:<br>
 <code>tar -xaf slurm*tar.bz2</code>
 <li><code>cd</code> to the directory containing the Slurm source and type
 <code>./configure</code> with appropriate options (see below).</li>
@@ -135,7 +138,7 @@ present. Build dependencies for various plugins and commands are denoted below:
 <li> <b>sview</b> The sview command will be built only if <i>gtk+-2.0</i>
 		is installed.</li>
 </ul>
-Please see the <a href="download.html">Download</a> page for references to
+<p>Please see the <a href="download.html">Download</a> page for references to
 required software to build these plugins.</p>
 
 <p>To build RPMs directly, copy the distributed tarball into a directory
@@ -160,7 +163,7 @@ Some macro definitions that may be used in building Slurm include:
 <dt>with_ssl
 <dd>Specifies SSL library installation location
 </dl>
-<p>An example .rpmmacros file:
+<p>An example .rpmmacros file:</p>
 <pre>
 # .rpmmacros
 # Override some RPM macros from /usr/lib/rpm/macros
@@ -171,29 +174,31 @@ Some macro definitions that may be used in building Slurm include:
 %_sysconfdir       %{_prefix}/etc/slurm
 %_defaultdocdir    %{_prefix}/doc
 %with_munge        "--with-munge=/opt/munge"
-</pre></p>
+</pre>
 
-<h3>RPMs Installed</h3>
+<h3 id="rpms">RPMs Installed<a class="slurm_link" href="#rpms"></a></h3>
 
 <p>The RPMs needed on the head node, compute nodes, and slurmdbd node can vary
 by configuration, but here is a suggested starting point:
 <ul>
 <li>Head Node (where the slurmctld daemon runs),<br>
-    Compute and Login Nodes</li>
+    Compute and Login Nodes
 	<ul>
 	<li>slurm</li>
 	<li>slurm-perlapi</li>
 	<li>slurm-slurmctld (only on the head node)</li>
 	<li>slurm-slurmd (only on the compute nodes)</li>
 	</ul>
-<li>SlurmDBD Node</li>
+</li>
+<li>SlurmDBD Node
 	<ul>
 	<li>slurm</li>
 	<li>slurm-slurmdbd</li>
 	</ul>
+</li>
 </ul>
 
-<h2>Daemons</h2>
+<h2 id="daemons">Daemons<a class="slurm_link" href="#daemons"></a></h2>
 
 <p><b>slurmctld</b> is sometimes called the &quot;controller&quot;.
 It orchestrates Slurm activities, including queuing of jobs,
@@ -231,7 +236,7 @@ page contains more information.</p>
 <p><b>slurmctld</b> and/or <b>slurmd</b> should be initiated at node startup
 time per the Slurm configuration.
 
-<h3><a name="HA"></a>High Availability</h3>
+<h3 id="HA">High Availability<a class="slurm_link" href="#HA"></a></h3>
 
 <p>Multiple SlurmctldHost entries can be configured, with any entry beyond the
 first being treated as a backup host. Any backup hosts configured should be on
@@ -247,6 +252,12 @@ mode. The primary reads the saved state and resumes normal operation. Likewise,
 if both of the first two listed hosts fail the third SlurmctldHost will take
 over until the primary returns to service. Other than a brief period of non-
 responsiveness, the transition back and forth should go undetected.</p>
+
+<p>Note that with an already running cluster, changing the order of the
+SlurmctldHost entries via <code>scontrol reconfigure</code> is not supported.
+The supported method is to drain and restart the cluster since running jobs
+may still go the prevous primary controller when completing and delay
+scheduling.</p>
 
 <p>Prior to 18.08, Slurm used the <a href="slurm.conf.html#OPT_BackupAddr">
 &quot;BackupAddr&quot;</a> and <a href="slurm.conf.html#OPT_BackupController">
@@ -269,15 +280,21 @@ information is cached in memory rather than written to disk when the node fails.
 The interval between state saves being written to disk can be configured at
 build time by defining SAVE_MAX_WAIT to a different value than five.</p>
 
-<h2>Infrastructure</h2>
-<h3>User and Group Identification</h3>
+<h2 id="infrastructure">Infrastructure
+<a class="slurm_link" href="#infrastructure"></a>
+</h2>
+<h3 id="user_group">User and Group Identification
+<a class="slurm_link" href="#user_group"></a>
+</h3>
 <p>There must be a uniform user and group name space (including
 UIDs and GIDs) across the cluster.
 It is not necessary to permit user logins to the control hosts
 (<b>SlurmctldHost</b>), but the
 users and groups must be resolvable on those hosts.</p>
 
-<h3>Authentication of Slurm communications</h3>
+<h3 id="communication">Authentication of Slurm communications
+<a class="slurm_link" href="#communication"></a>
+</h3>
 <p>All communications between Slurm components are authenticated. The
 authentication infrastructure is provided by a dynamically loaded
 plugin chosen at runtime via the <b>AuthType</b> keyword in the Slurm
@@ -289,11 +306,13 @@ same <i>munge.key</i> file. The MUNGE daemon, <i>munged</i>, must also be
 started before Slurm daemons. Note that MUNGE does require clocks to be
 synchronized throughout the cluster, usually done by NTP.</p>
 
-<h3>MPI support</h3>
+<h3 id="mpi">MPI support<a class="slurm_link" href="#mpi"></a></h3>
 <p>Slurm supports many different MPI implementations.
 For more information, see <a href="quickstart.html#mpi">MPI</a>.
 
-<h3>Scheduler support</h3>
+<h3 id="scheduler">Scheduler support
+<a class="slurm_link" href="#scheduler"></a>
+</h3>
 <p>Slurm can be configured with rather simple or quite sophisticated
 scheduling algorithms depending upon your needs and willingness to
 manage the configuration (much of which requires a database).
@@ -327,7 +346,9 @@ jobs in higher priority queues.</li>
 <a href="resource_limits.html">Resource Limits</a> and
 <a href="cons_res_share.html">Sharing Consumable Resources</a>.</p>
 
-<h3>Resource selection</h3>
+<h3 id="resource">Resource selection
+<a class="slurm_link" href="#resource"></a>
+</h3>
 <p>The resource selection mechanism used by Slurm is controlled by the
 <b>SelectType</b> configuration parameter.
 If you want to execute multiple jobs per node, but track and manage allocation
@@ -337,17 +358,19 @@ recommended.
 For more information, please see
 <a href="cons_res.html">Consumable Resources in Slurm</a>.</p>
 
-<h3>Logging</h3>
+<h3 id="logging">Logging<a class="slurm_link" href="#logging"></a></h3>
 <p>Slurm uses syslog to record events if the <code>SlurmctldLogFile</code> and
 <code>SlurmdLogFile</code> locations are not set.</p>
 
-<h3>Accounting</h3>
+<h3 id="accounting">Accounting<a class="slurm_link" href="#accounting"></a></h3>
 <p>Slurm supports accounting records being written to a simple text file,
 directly to a database (MySQL or MariaDB), or to a daemon securely
 managing accounting data for multiple clusters. For more information
 see <a href="accounting.html">Accounting</a>. </p>
 
-<h3>Compute node access</h3>
+<h3 id="node_access">Compute node access
+<a class="slurm_link" href="#node_access"></a>
+</h3>
 <p>Slurm does not by itself limit access to allocated compute nodes,
 but it does provide mechanisms to accomplish this.
 There is a Pluggable Authentication Module (PAM) for restricting access
@@ -358,7 +381,7 @@ On job termination, any processes initiated by the user outside of
 Slurm's control may be killed using an <i>Epilog</i> script configured
 in <i>slurm.conf</i>.</p>
 
-<h2><a name="Config"></a>Configuration</h2>
+<h2 id="Config">Configuration<a class="slurm_link" href="#Config"></a></h2>
 <p>The Slurm configuration file includes a wide variety of parameters.
 This configuration file must be available on each node of the cluster and
 must have consistent contents. A full
@@ -459,7 +482,7 @@ PartitionName=pdebug Nodes=mcr[0-191] MaxTime=30 MaxNodes=32 Default=YES
 PartitionName=pbatch Nodes=mcr[192-1151]
 </pre>
 
-<h2>Security</h2>
+<h2 id="security">Security<a class="slurm_link" href="#security"></a></h2>
 <p>Besides authentication of Slurm communications based upon the value
 of the <b>AuthType</b>, digital signatures are used in job step
 credentials.
@@ -471,7 +494,7 @@ job step initiation overhead from the <i> slurmctld </i> daemon.
 The digital signature mechanism is specified by the <b>CredType</b>
 configuration parameter and the default mechanism is MUNGE. </p>
 
-<h3>Authentication</h3>
+<h3 id="auth">Authentication<a class="slurm_link" href="#auth"></a></h3>
 <p>Authentication of communications (identifying who generated a particular
 message) between Slurm components can use a different security mechanism
 that is configurable.
@@ -486,12 +509,16 @@ determine which authentication plugins may be built.
 The configuration file specifies which of the available plugins will be
 utilized.</p>
 
-<h3>Pluggable Authentication Module (PAM) support</h3>
+<h3 id="PAM">Pluggable Authentication Module (PAM) support
+<a class="slurm_link" href="#PAM"></a>
+</h3>
 <p>A PAM module (Pluggable Authentication Module) is available for Slurm that
 can prevent a user from accessing a node which he has not been allocated,
 if that mode of operation is desired.</p>
 
-<h2>Starting the Daemons</h2>
+<h2 id="starting_daemons">Starting the Daemons
+<a class="slurm_link" href="#starting_daemons"></a>
+</h2>
 <p>For testing purposes you may want to start by just running slurmctld and slurmd
 on one node. By default, they execute in the background. Use the <span class="commandline">-D</span>
 option for each daemon to execute them in the foreground and logging will be done
@@ -516,7 +543,9 @@ down manually using the <span class="commandline">scontrol</span> command will
 be returned to service unless noted as being down in the configuration file.
 In practice, Slurm consistently restarts with preservation.</p>
 
-<h2>Administration Examples</h2>
+<h2 id="admin_examples">Administration Examples
+<a class="slurm_link" href="#admin_examples"></a>
+</h2>
 <p><span class="commandline">scontrol</span> can be used to print all system information
 and modify most of it. Only a few examples are shown below. Please see the scontrol
 man page for full details. The commands and options are all case insensitive.</p>
@@ -598,7 +627,7 @@ Slurmctld(backup) at adevj is UP
 adev0: scontrol shutdown
 </pre>
 
-<h2><a name="upgrade"></a>Upgrades</h2>
+<h2 id="upgrade">Upgrades<a class="slurm_link" href="#upgrade"></a></h2>
 
 <p>Background: The Slurm version number contains three period-separated numbers
 that represent both the major Slurm release and maintenance release level.
@@ -690,6 +719,14 @@ versions (e.g. 20.02.0-pre1 to 20.02.0-pre2).
 Developers will try to note these cases in the NEWS file.
 Contents of major releases are also described in the RELEASE_NOTES file.</p>
 
+<p>A common approach when performing upgrades is to install the new version
+of Slurm to a unique directory and use a symbolic link to point the
+directory in your PATH to the version of Slurm you would like to use.
+This allows you to install the new version before you are in a maintenance
+period as well as easily switch between versions should you need to roll
+back for any reason. It also avoids potential problems with library conflicts
+that might arise from installing different versions to the same directory.</p>
+
 <p>The libslurm.so version is increased every major release.
 So things like MPI libraries with Slurm integration should be recompiled.
 Sometimes it works to just symlink the old .so name(s) to the new one, but this
@@ -702,26 +739,34 @@ You can either increase the timeout values during an upgrade or ensure that the
 slurmd daemons on compute nodes are not down for longer than SlurmdTimeout.
 The recommended upgrade order is as follows:</p>
 <ol>
-<li>Shutdown the slurmdbd daemon</li>
+<li>Shutdown the slurmdbd daemon.</li>
 <li>Backup the Slurm database using mysqldump (or similar tool), e.g. <span
     class="commandline">mysqldump --databases slurm_acct_db > backup.sql</span>.
     You may also want to take this opportunity to verify that
     the innodb_buffer_pool_size in my.cnf is at least 128M.</li>
-<li>Upgrade the slurmdbd daemon</li>
-<li>Restart the slurmdbd daemon</li>
+<li>Upgrade the slurmdbd daemon.</li>
+<li>Restart the slurmdbd daemon.</li>
+<ul>
+<li><b>NOTE</b>: The first time slurmdbd is started after an upgrade it will
+take some time to update existing records in the database. If slurmdbd is
+started with systemd, it may think that slurmdbd is not responding and kill
+the process when it reaches its timeout value, which causes problems with the
+upgrade. We recommend starting slurmdbd by calling the command directly rather
+than using systemd when performing an upgrade.</li>
+</ul>
 <li>Increase configured SlurmdTimeout and SlurmctldTimeout values and
-    execute "scontrol reconfig" for them to take effect</li>
-<li>Shutdown the slurmctld daemon(s)</li>
-<li>Shutdown the slurmd daemons on the compute nodes</li>
+    execute "scontrol reconfig" for them to take effect.</li>
+<li>Shutdown the slurmctld daemon(s).</li>
+<li>Shutdown the slurmd daemons on the compute nodes.</li>
 <li>Copy the contents of the configured StateSaveLocation directory (in case
-    of any possible failure)</li>
-<li>Upgrade the slurmctld and slurmd daemons</li>
-<li>Restart the slurmd daemons on the compute nodes</li>
-<li>Restart the slurmctld daemon(s)</li>
-<li>Validate proper operation</li>
+    of any possible failure).</li>
+<li>Upgrade the slurmctld and slurmd daemons.</li>
+<li>Restart the slurmd daemons on the compute nodes.</li>
+<li>Restart the slurmctld daemon(s).</li>
+<li>Validate proper operation.</li>
 <li>Restore configured SlurmdTimeout and SlurmctldTimeout values and
-    execute "scontrol reconfig" for them to take effect</li>
-<li>Destroy backup copies of database and/or state files</li>
+    execute "scontrol reconfig" for them to take effect.</li>
+<li>Destroy backup copies of database and/or state files.</li>
 </ol>
 <p><b>Note</b>: It is possible to update the slurmd daemons on a node-by-node
 basis after the slurmctld daemon(s) are upgraded, but do make sure their down
@@ -732,7 +777,7 @@ need modification to support a new version of Slurm. It is common for plugins
 to add new functions and function arguments during major updates.
 See the RELEASE_NOTES file for details.</p>
 
-<h2><a name="FreeBSD"></a>FreeBSD</h2>
+<h2 id="FreeBSD">FreeBSD<a class="slurm_link" href="#FreeBSD"></a></h2>
 
 <p>FreeBSD administrators can install the latest stable Slurm as a binary
 package using:</p>
@@ -749,6 +794,6 @@ cd /usr/ports/sysutils/slurm-wlm && make install
 typical compute nodes.  Installing from source allows the user to enable
 options such as mysql and gui tools via a configuration menu.</p>
 
-<p style="text-align:center;">Last modified 21 May 2021</p>
+<p style="text-align:center;">Last modified 18 October 2021</p>
 
 <!--#include virtual="footer.txt"-->

@@ -1883,7 +1883,7 @@ static int _restore_node_state(int recover,
 
 	for (i=0, old_node_ptr=old_node_table_ptr; i<old_node_record_count;
 	     i++, old_node_ptr++) {
-		bool drain_flag = false, down_flag = false;
+		bool cloud_flag = false, drain_flag = false, down_flag = false;
 		dynamic_plugin_data_t *tmp_select_nodeinfo;
 
 		node_ptr  = find_node_record(old_node_ptr->name);
@@ -1891,6 +1891,8 @@ static int _restore_node_state(int recover,
 			continue;
 
 		node_ptr->not_responding = false;
+		if (IS_NODE_CLOUD(node_ptr))
+			cloud_flag = true;
 		if (IS_NODE_DOWN(node_ptr))
 			down_flag = true;
 		if (IS_NODE_DRAIN(node_ptr))
@@ -1902,10 +1904,18 @@ static int _restore_node_state(int recover,
 			node_ptr->node_state =
 				(node_ptr->node_state     & NODE_STATE_BASE) |
 				(old_node_ptr->node_state & NODE_STATE_FLAGS);
+			/*
+			 * If node was FUTURE, then it wasn't up so mark it as
+			 * powered_down.
+			 */
+			if (cloud_flag)
+				node_ptr->node_state |= NODE_STATE_POWERED_DOWN;
 		} else {
 			node_ptr->node_state = old_node_ptr->node_state;
 		}
 
+		if (cloud_flag)
+			node_ptr->node_state |= NODE_STATE_CLOUD;
 		if (down_flag) {
 			node_ptr->node_state &= NODE_STATE_FLAGS;
 			node_ptr->node_state |= NODE_STATE_DOWN;
@@ -2675,7 +2685,17 @@ static void _restore_job_accounting(void)
 
 	list_iterator_reset(job_iterator);
 	while ((job_ptr = list_next(job_iterator))) {
-		(void) build_feature_list(job_ptr);
+		(void) build_feature_list(job_ptr, false);
+		(void) build_feature_list(job_ptr, true);
+
+		if (job_ptr->details->features_use ==
+		    job_ptr->details->features)
+			job_ptr->details->feature_list_use =
+				job_ptr->details->feature_list;
+		else if (job_ptr->details->features_use ==
+			 job_ptr->details->prefer)
+			job_ptr->details->feature_list_use =
+				job_ptr->details->prefer_list;
 
 		if (IS_JOB_RUNNING(job_ptr) || IS_JOB_SUSPENDED(job_ptr))
 			job_array_start(job_ptr);
@@ -2727,10 +2747,7 @@ static void _acct_restore_active_jobs(void)
 		if (IS_JOB_SUSPENDED(job_ptr))
 			jobacct_storage_g_job_suspend(acct_db_conn, job_ptr);
 		if (IS_JOB_SUSPENDED(job_ptr) || IS_JOB_RUNNING(job_ptr)) {
-			if (!with_slurmdbd)
-				jobacct_storage_g_job_start(
-					acct_db_conn, job_ptr);
-			else if (job_ptr->db_index != NO_VAL64)
+			if (job_ptr->db_index != NO_VAL64)
 				job_ptr->db_index = 0;
 			step_iterator = list_iterator_create(
 				job_ptr->step_list);

@@ -38,9 +38,17 @@ if {![file exists $slurmrestd]} {
 	skip "slurmrestd not installed"
 }
 
-if {[run_command_status -nolog "$bin_oasgen version"]} {
+# TODO: Currently only OpenAPI-Generator version 4.x is supported by the test.
+#       See Bug 11963.
+set oasgen_check [run_command -nolog "$bin_oasgen version"]
+if {[dict get $oasgen_check exit_code] ||
+    ![regexp {^([0-9]+)[.]\S+} [dict get $oasgen_check output] fullmatch oas_gen_maj]} {
 	skip "$bin_oasgen not found"
 }
+if {$oas_gen_maj != "4"} {
+	skip "unsupported openapi-generator-cli version: $fullmatch != 4.x"
+}
+
 
 if {[run_command_status -nolog "$bin_py3 --version"]} {
 	skip "$bin_py3 not found"
@@ -115,13 +123,13 @@ foreach content_path [glob -type d $scripts/*] {
 	# move into the test dir since install oas leaves trash in the cwd
 	cd $test_dir
 
-	run_command -nolog -subtest \
+	run_command -nolog -fail \
 		"$bin_oasgen generate -i '$spec' -g python --strict-spec=true -o '$pyapi'"
 
-	run_command -nolog -subtest \
-		"$bin_virtualenv $pyenv"
+	run_command -nolog -fail \
+		"$bin_virtualenv --clear --no-download --system-site-packages $pyenv"
 
-	run_command -nolog -subtest \
+	run_command -nolog -fail \
 		"source $pyenv/bin/activate; pip3 install '$pyapi'"
 
 	foreach script [glob -type f $scripts/$content/*.py] {

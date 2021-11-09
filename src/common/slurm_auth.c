@@ -95,6 +95,17 @@ static const char *syms[] = {
 	"auth_p_token_generate",
 };
 
+typedef struct {
+	int plugin_id;
+	char *type;
+} auth_plugin_types_t;
+
+auth_plugin_types_t auth_plugin_types[] = {
+	{ AUTH_PLUGIN_NONE, "auth/none" },
+	{ AUTH_PLUGIN_MUNGE, "auth/munge" },
+	{ AUTH_PLUGIN_JWT, "auth/jwt" },
+};
+
 /*
  * A global authentication context.  "Global" in the sense that there's
  * only one, with static bindings.  We don't export it.
@@ -103,6 +114,15 @@ static slurm_auth_ops_t *ops = NULL;
 static plugin_context_t **g_context = NULL;
 static int g_context_num = -1;
 static pthread_mutex_t context_lock = PTHREAD_MUTEX_INITIALIZER;
+
+extern const char *auth_get_plugin_name(int plugin_id)
+{
+	for (int i = 0; i < ARRAY_SIZE(auth_plugin_types); i++)
+		if (plugin_id == auth_plugin_types[i].plugin_id)
+			return auth_plugin_types[i].type;
+
+	return "unknown";
+}
 
 extern int slurm_auth_init(char *auth_type)
 {
@@ -122,7 +142,8 @@ extern int slurm_auth_init(char *auth_type)
 
 	if (getenv("SLURM_JWT")) {
 		xfree(slurm_conf.authtype);
-		slurm_conf.authtype = xstrdup("auth/jwt");
+		slurm_conf.authtype = xstrdup(
+			auth_get_plugin_name(AUTH_PLUGIN_JWT));
 	} else if (auth_type) {
 		xfree(slurm_conf.authtype);
 		slurm_conf.authtype = xstrdup(auth_type);
@@ -334,8 +355,8 @@ void *auth_g_unpack(buf_t *buf, uint16_t protocol_version)
 				return cred;
 			}
 		}
-		error("%s: remote plugin_id %u not found",
-		      __func__, plugin_id);
+		error("%s: authentication plugin %s(%u) not found",
+		      __func__, auth_get_plugin_name(plugin_id), plugin_id);
 		return NULL;
 	}  else {
 		error("%s: protocol_version %hu not supported",

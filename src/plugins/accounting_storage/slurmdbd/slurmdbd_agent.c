@@ -41,7 +41,6 @@
 
 #include "src/common/fd.h"
 #include "src/common/slurmdbd_pack.h"
-#include "src/common/xsignal.h"
 #include "src/common/xstring.h"
 
 #include "slurmdbd_agent.h"
@@ -65,6 +64,7 @@ static pthread_t agent_tid      = 0;
 
 static bool      halt_agent          = 0;
 static time_t    slurmdbd_shutdown   = 0;
+static bool      agent_running       = 0;
 
 static pthread_mutex_t slurmdbd_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  slurmdbd_cond = PTHREAD_COND_INITIALIZER;
@@ -548,10 +548,6 @@ static void _max_dbd_msg_action(uint32_t *msg_cnt)
 		*msg_cnt -= _purge_job_start_req();
 }
 
-static void _sig_handler(int signal)
-{
-}
-
 static int _print_agent_list_msg_type(void *x, void *arg)
 {
 	buf_t *buffer = (buf_t *) x;
@@ -605,20 +601,18 @@ static void *_agent(void *x)
 	buf_t *buffer;
 	struct timespec abs_time;
 	static time_t fail_time = 0;
-	int sigarray[] = {SIGUSR1, 0};
 	persist_msg_t list_req = {0};
 	dbd_list_msg_t list_msg;
 	DEF_TIMERS;
+
+	slurm_mutex_lock(&agent_lock);
+	agent_running = true;
+	slurm_mutex_unlock(&agent_lock);
 
 	list_req.msg_type = DBD_SEND_MULT_MSG;
 	list_req.conn = slurmdbd_conn;
 	list_req.data = &list_msg;
 	memset(&list_msg, 0, sizeof(dbd_list_msg_t));
-
-	/* Prepare to catch SIGUSR1 to interrupt pending
-	 * I/O and terminate in a timely fashion. */
-	xsignal(SIGUSR1, _sig_handler);
-	xsignal_unblock(sigarray);
 
 	log_flag(AGENT, "slurmdbd agent_count=%d with msg_type=%s",
 		 list_count(agent_list),
@@ -666,23 +660,22 @@ static void *_agent(void *x)
 			info("agent_count:%d", cnt);
 		/* Leave item on the queue until processing complete */
 		if (agent_list) {
-			int handle_agent_count = 1000;
-			if (cnt > handle_agent_count) {
+			uint32_t msg_size = sizeof(list_req);
+			if (cnt > 1) {
 				int agent_count = 0;
 				ListIterator agent_itr =
 					list_iterator_create(agent_list);
 				list_msg.my_list = list_create(NULL);
 				while ((buffer = list_next(agent_itr))) {
+					msg_size += size_buf(buffer);
+					if (msg_size > MAX_MSG_SIZE)
+						break;
 					list_enqueue(list_msg.my_list, buffer);
 					agent_count++;
-					if (agent_count > handle_agent_count)
+					if (agent_count > 1000)
 						break;
 				}
 				list_iterator_destroy(agent_itr);
-				buffer = pack_slurmdbd_msg(
-					&list_req, SLURM_PROTOCOL_VERSION);
-			} else if (cnt > 1) {
-				list_msg.my_list = agent_list;
 				buffer = pack_slurmdbd_msg(
 					&list_req, SLURM_PROTOCOL_VERSION);
 			} else
@@ -779,6 +772,7 @@ static void *_agent(void *x)
 		 list_count(agent_list));
 
 	FREE_NULL_LIST(agent_list);
+	agent_running = false;
 	slurm_mutex_unlock(&agent_lock);
 	return NULL;
 }
@@ -803,29 +797,35 @@ static void _create_agent(void)
 
 static void _shutdown_agent(void)
 {
-	int i;
+	if (!agent_tid)
+		return;
 
-	if (agent_tid) {
-		slurmdbd_shutdown = time(NULL);
-		for (i=0; i<50; i++) {	/* up to 5 secs total */
-			slurm_cond_broadcast(&agent_cond);
-			usleep(100000);	/* 0.1 sec per try */
-			if (pthread_kill(agent_tid, SIGUSR1))
-				break;
+	slurmdbd_shutdown = time(NULL);
+	for (int i = 0; i < 50; i++) {	/* up to 5 secs total */
+		slurm_mutex_lock(&agent_lock);
+		if (!agent_running) {
+			slurm_mutex_unlock(&agent_lock);
+			goto fini;
+		}
+		slurm_cond_broadcast(&agent_cond);
+		slurm_mutex_unlock(&agent_lock);
 
-		}
-		/* On rare occasions agent thread may not end quickly,
-		 * perhaps due to communication problems with slurmdbd.
-		 * Cancel it and join before returning or we could remove
-		 * and leave the agent without valid data */
-		if (pthread_kill(agent_tid, 0) == 0) {
-			error("agent failed to shutdown gracefully");
-			error("unable to save pending requests");
-			pthread_cancel(agent_tid);
-		}
-		pthread_join(agent_tid,  NULL);
-		agent_tid = 0;
+		usleep(100000);	/* 0.1 sec per try */
 	}
+
+	/*
+	 * On rare occasions agent thread may not end quickly,
+	 * perhaps due to communication problems with slurmdbd.
+	 * Cancel it and join before returning or we could remove
+	 * and leave the agent without valid data.
+	 */
+	error("agent failed to shutdown gracefully");
+	error("unable to save pending requests");
+	pthread_cancel(agent_tid);
+
+fini:
+	pthread_join(agent_tid,  NULL);
+	agent_tid = 0;
 }
 
 /****************************************************************************

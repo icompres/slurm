@@ -20,7 +20,7 @@ data for specific nodes, steps, and data series in
 "comma separated value" form to a file which can be imported into other
 analysis tools such as spreadsheets.
 .LP
-The second, (Item-Extract) extracts one data time from one time series for all
+The second, (Item\-Extract) extracts one data time from one time series for all
 the samples on all the nodes from a jobs HDF5 profile.
 .LP
 \- Finds sample with maximum value of the item.
@@ -31,22 +31,6 @@ sample
 
 .SH "OPTIONS"
 .LP
-
-.TP
-\fB\-L\fR, \fB\-\-list\fR
-
-Print the items of a series contained in a job file.
-.RS
-.TP 10
-List mode options
-
-.TP
-\fB\-i\fR, \fB\-\-input\fR=\fIpath\fR
-Merged file to extract from (default ./job_$jobid.h5)
-
-.TP
-\fB\-s\fR, \fB\-\-series\fR=[Energy | Filesystem | Network | Task]
-.RE
 
 .TP
 \fB\-E\fR, \fB\-\-extract\fR
@@ -72,8 +56,11 @@ Level to which series is attached. (default Node:Totals)
 .TP
 \fB\-s\fR, \fB\-\-series\fR=[Energy | Filesystem | Network | Task | Task_#]
 \fBTask\fR is all tasks, \fBTask_#\fR (# is a task id) (default is everything)
-
 .RE
+
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print this description of use.
 
 .TP
 \fB\-I\fR, \fB\-\-item\-extract\fR
@@ -82,7 +69,7 @@ Extract one data item from all samples of one data series from all nodes in a me
 
 .RS
 .TP 10
-Item-Extract mode options
+Item\-Extract mode options
 
 .TP
 \fB\-s\fR, \fB\-\-series\fR=[Energy | Filesystem | Network | Task]\fR
@@ -94,17 +81,29 @@ Name of data item in series (See note below).
 .RE
 
 .TP
-\fB\-j\fR, \fB\-\-jobs\fR=\fI<job(.step)>\fR
-Format is <job(.step)>. Merge this job/step
-(or a comma-separated list of job steps). This option is required.
+\fB\-j\fR, \fB\-\-jobs\fR=<\fIjob\fR[.\fIstep\fR]>
+Format is <\fIjob\fR[.\fIstep\fR]>. Merge this job/step
+(or a comma\-separated list of job steps). This option is required.
 Not specifying a step will result in all steps found to be processed.
 
 .TP
-\fB\-h\fR, \fB\-\-help\fR
-Print this description of use.
+\fB\-L\fR, \fB\-\-list\fR
+
+Print the items of a series contained in a job file.
+.RS
+.TP 10
+List mode options
 
 .TP
-\fB\-o\fR, \fB\-\-output\fR=\fIpath\fR
+\fB\-i\fR, \fB\-\-input\fR=\fIpath\fR
+Merged file to extract from (default ./job_$jobid.h5)
+
+.TP
+\fB\-s\fR, \fB\-\-series\fR=[Energy | Filesystem | Network | Task]
+.RE
+
+.TP
+\fB\-o\fR, \fB\-\-output\fR=<\fIpath\fR>
 .nf
 Path to a file into which to write.
 Default for merge is ./job_$jobid.h5
@@ -112,23 +111,23 @@ Default for extract is ./extract_$jobid.csv
 .fi
 
 .TP
-\fB\-p\fR, \fB\-\-profiledir\fR=\fIdir\fR
-Directory location where node-step files exist default is set in
+\fB\-p\fR, \fB\-\-profiledir\fR=<\fIdir\fR>
+Directory location where node\-step files exist default is set in
 acct_gather.conf.
 
 .TP
 \fB\-S\fR, \fB\-\-savefiles\fR
-Instead of removing node-step files after merging them into the job file,
+Instead of removing node\-step files after merging them into the job file,
 keep them around.
-
-.TP
-\fB\-\-user\fR=\fIuser\fR
-User who profiled job.
-(Handy for root user, defaults to user running this command.)
 
 .TP
 \fB\-\-usage\fR
 Display brief usage message.
+
+.TP
+\fB\-\-user\fR=<\fIuser\fR>
+User who profiled job.
+(Handy for root user, defaults to user running this command.)
 
 .SH "Data Items per Series"
 
@@ -186,7 +185,7 @@ necessary for the information you are trying to gather.
 .SH "EXAMPLES"
 
 .TP
-Merge node-step files (as part of a sbatch script):
+Merge node\-step files (as part of a sbatch script):
 
 .nf
 $ sbatch \-n1 \-d$SLURM_JOB_ID \-\-wrap="sh5util \-\-savefiles \-j $SLURM_JOB_ID"

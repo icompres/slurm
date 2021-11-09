@@ -58,24 +58,11 @@ typedef struct {
 	int	(*step_resume)		(void);
 	int	(*step_destroy)		(cgroup_ctl_type_t sub);
 	bool	(*has_pid)		(pid_t pid);
-	cgroup_limits_t *(*root_constrain_get) (cgroup_ctl_type_t sub);
-	int	(*root_constrain_set)	(cgroup_ctl_type_t sub,
+	cgroup_limits_t *(*constrain_get) (cgroup_ctl_type_t sub,
+					   cgroup_level_t level);
+	int	(*constrain_set)	(cgroup_ctl_type_t sub,
+					 cgroup_level_t level,
 					 cgroup_limits_t *limits);
-	cgroup_limits_t *(*system_constrain_get) (cgroup_ctl_type_t sub);
-	int	(*system_constrain_set)	(cgroup_ctl_type_t sub,
-					 cgroup_limits_t *limits);
-	int	(*user_constrain_set)	(cgroup_ctl_type_t sub,
-					 stepd_step_rec_t *job,
-					 cgroup_limits_t *limits);
-	int	(*job_constrain_set)	(cgroup_ctl_type_t sub,
-					 stepd_step_rec_t *job,
-					 cgroup_limits_t *limits);
-	int	(*step_constrain_set)	(cgroup_ctl_type_t sub,
-					 stepd_step_rec_t *job,
-					 cgroup_limits_t *limits);
-	int     (*task_constrain_set)   (cgroup_ctl_type_t sub,
-					 cgroup_limits_t *limits,
-					 uint32_t taskid);
 	int	(*step_start_oom_mgr)	(void);
 	cgroup_oom_t *(*step_stop_oom_mgr) (stepd_step_rec_t *job);
 	int	(*task_addto)		(cgroup_ctl_type_t sub,
@@ -100,14 +87,8 @@ static const char *syms[] = {
 	"cgroup_p_step_resume",
 	"cgroup_p_step_destroy",
 	"cgroup_p_has_pid",
-	"cgroup_p_root_constrain_get",
-	"cgroup_p_root_constrain_set",
-	"cgroup_p_system_constrain_get",
-	"cgroup_p_system_constrain_set",
-	"cgroup_p_user_constrain_set",
-	"cgroup_p_job_constrain_set",
-	"cgroup_p_step_constrain_set",
-	"cgroup_p_task_constrain_set",
+	"cgroup_p_constrain_get",
+	"cgroup_p_constrain_set",
 	"cgroup_p_step_start_oom_mgr",
 	"cgroup_p_step_stop_oom_mgr",
 	"cgroup_p_task_addto",
@@ -153,7 +134,6 @@ static void _clear_slurm_cgroup_conf()
 	xfree(slurm_cgroup_conf.cgroup_mountpoint);
 	xfree(slurm_cgroup_conf.cgroup_prepend);
 	slurm_cgroup_conf.constrain_cores = false;
-	slurm_cgroup_conf.task_affinity = false;
 	slurm_cgroup_conf.constrain_ram_space = false;
 	slurm_cgroup_conf.allowed_ram_space = 100;
 	slurm_cgroup_conf.max_ram_percent = 100;
@@ -189,7 +169,6 @@ static void _pack_cgroup_conf(buf_t *buffer)
 	packstr(slurm_cgroup_conf.cgroup_prepend, buffer);
 
 	packbool(slurm_cgroup_conf.constrain_cores, buffer);
-	packbool(slurm_cgroup_conf.task_affinity, buffer);
 
 	packbool(slurm_cgroup_conf.constrain_ram_space, buffer);
 	packfloat(slurm_cgroup_conf.allowed_ram_space, buffer);
@@ -234,7 +213,6 @@ static int _unpack_cgroup_conf(buf_t *buffer)
 			       &uint32_tmp, buffer);
 
 	safe_unpackbool(&slurm_cgroup_conf.constrain_cores, buffer);
-	safe_unpackbool(&slurm_cgroup_conf.task_affinity, buffer);
 
 	safe_unpackbool(&slurm_cgroup_conf.constrain_ram_space, buffer);
 	safe_unpackfloat(&slurm_cgroup_conf.allowed_ram_space, buffer);
@@ -276,7 +254,6 @@ static void _read_slurm_cgroup_conf(void)
 		{"CgroupMountpoint", S_P_STRING},
 		{"CgroupReleaseAgentDir", S_P_STRING},
 		{"ConstrainCores", S_P_BOOLEAN},
-		{"TaskAffinity", S_P_BOOLEAN},
 		{"ConstrainRAMSpace", S_P_BOOLEAN},
 		{"AllowedRAMSpace", S_P_FLOAT},
 		{"MaxRAMPercent", S_P_FLOAT},
@@ -341,9 +318,6 @@ static void _read_slurm_cgroup_conf(void)
 		if (!s_p_get_boolean(&slurm_cgroup_conf.constrain_cores,
 				     "ConstrainCores", tbl))
 			slurm_cgroup_conf.constrain_cores = false;
-		if (!s_p_get_boolean(&slurm_cgroup_conf.task_affinity,
-				     "TaskAffinity", tbl))
-			slurm_cgroup_conf.task_affinity = false;
 
 		/* RAM and Swap constraints related conf items */
 		if (!s_p_get_boolean(&slurm_cgroup_conf.constrain_ram_space,
@@ -560,12 +534,6 @@ extern List cgroup_get_conf_list(void)
 	key_pair = xmalloc(sizeof(config_key_pair_t));
 	key_pair->name = xstrdup("ConstrainCores");
 	key_pair->value = xstrdup_printf("%s", cg_conf->constrain_cores ?
-					 "yes" : "no");
-	list_append(cgroup_conf_l, key_pair);
-
-	key_pair = xmalloc(sizeof(config_key_pair_t));
-	key_pair->name = xstrdup("TaskAffinity");
-	key_pair->value = xstrdup_printf("%s", cg_conf->task_affinity ?
 					 "yes" : "no");
 	list_append(cgroup_conf_l, key_pair);
 
@@ -885,77 +853,22 @@ extern bool cgroup_g_has_pid(pid_t pid)
 	return (*(ops.has_pid))(pid);
 }
 
-extern cgroup_limits_t *cgroup_g_root_constrain_get(cgroup_ctl_type_t sub)
+extern cgroup_limits_t *cgroup_g_constrain_get(cgroup_ctl_type_t sub,
+					       cgroup_level_t level)
 {
 	if (cgroup_g_init() < 0)
 		return NULL;
 
-	return (*(ops.root_constrain_get))(sub);
+	return (*(ops.constrain_get))(sub, level);
 }
 
-extern int cgroup_g_root_constrain_set(cgroup_ctl_type_t sub,
-				       cgroup_limits_t *limits)
+extern int cgroup_g_constrain_set(cgroup_ctl_type_t sub, cgroup_level_t level,
+				  cgroup_limits_t *limits)
 {
 	if (cgroup_g_init() < 0)
 		return false;
 
-	return (*(ops.root_constrain_set))(sub, limits);
-}
-
-extern cgroup_limits_t *cgroup_g_system_constrain_get(cgroup_ctl_type_t sub)
-{
-	if (cgroup_g_init() < 0)
-		return NULL;
-
-	return (*(ops.system_constrain_get))(sub);
-}
-
-extern int cgroup_g_system_constrain_set(cgroup_ctl_type_t sub,
-					 cgroup_limits_t *limits)
-{
-	if (cgroup_g_init() < 0)
-		return false;
-
-	return (*(ops.system_constrain_set))(sub, limits);
-}
-
-extern int cgroup_g_user_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits)
-{
-	if (cgroup_g_init() < 0)
-		return false;
-
-	return (*(ops.user_constrain_set))(sub, job, limits);
-}
-
-extern int cgroup_g_job_constrain_set(cgroup_ctl_type_t sub,
-				      stepd_step_rec_t *job,
-				      cgroup_limits_t *limits)
-{
-	if (cgroup_g_init() < 0)
-		return false;
-
-	return (*(ops.job_constrain_set))(sub, job, limits);
-}
-
-extern int cgroup_g_step_constrain_set(cgroup_ctl_type_t sub,
-				       stepd_step_rec_t *job,
-				       cgroup_limits_t *limits)
-{
-	if (cgroup_g_init() < 0)
-		return false;
-
-	return (*(ops.step_constrain_set))(sub, job, limits);
-}
-
-extern int cgroup_g_task_constrain_set(cgroup_ctl_type_t sub,
-				       cgroup_limits_t *limits, uint32_t taskid)
-{
-	if (cgroup_g_init() < 0)
-		return false;
-
-	return (*(ops.task_constrain_set))(sub, limits, taskid);
+	return (*(ops.constrain_set))(sub, level, limits);
 }
 
 extern int cgroup_g_step_start_oom_mgr()

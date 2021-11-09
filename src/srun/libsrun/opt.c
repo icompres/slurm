@@ -969,21 +969,15 @@ static bool _opt_verify(void)
 
 	if (opt.hint &&
 	    !validate_hint_option(&opt)) {
-		if (sropt.cpu_bind_type & ~CPU_BIND_VERBOSE) {
-			if (opt.verbose)
-				info("--hint and --cpu-bind (other than --cpu-bind=verbose) are mutually exclusive. Ignoring --hint.");
-			slurm_option_reset(&opt, "hint");
-		} else {
-			xassert(opt.ntasks_per_core == NO_VAL);
-			xassert(opt.threads_per_core == NO_VAL);
-			if (verify_hint(opt.hint,
-					&opt.sockets_per_node,
-					&opt.cores_per_socket,
-					&opt.threads_per_core,
-					&opt.ntasks_per_core,
-					&sropt.cpu_bind_type)) {
-				exit(error_exit);
-			}
+		xassert(opt.ntasks_per_core == NO_VAL);
+		xassert(opt.threads_per_core == NO_VAL);
+		if (verify_hint(opt.hint,
+				&opt.sockets_per_node,
+				&opt.cores_per_socket,
+				&opt.threads_per_core,
+				&opt.ntasks_per_core,
+				&sropt.cpu_bind_type)) {
+			exit(error_exit);
 		}
 	}
 
@@ -1138,8 +1132,7 @@ static bool _opt_verify(void)
 		if (!(sropt.cpu_bind_type & (CPU_BIND_TO_SOCKETS |
 					   CPU_BIND_TO_CORES |
 					   CPU_BIND_TO_THREADS |
-					   CPU_BIND_TO_LDOMS |
-					   CPU_BIND_TO_BOARDS))) {
+					   CPU_BIND_TO_LDOMS))) {
 			sropt.cpu_bind_type |= CPU_BIND_TO_CORES;
 		}
 	}
@@ -1150,8 +1143,7 @@ static bool _opt_verify(void)
 		if (!(sropt.cpu_bind_type & (CPU_BIND_TO_SOCKETS |
 					   CPU_BIND_TO_CORES |
 					   CPU_BIND_TO_THREADS |
-					   CPU_BIND_TO_LDOMS |
-					   CPU_BIND_TO_BOARDS))) {
+					   CPU_BIND_TO_LDOMS))) {
 			sropt.cpu_bind_type |= CPU_BIND_TO_SOCKETS;
 		}
 	}
@@ -1186,6 +1178,9 @@ static bool _opt_verify(void)
 			opt.ntasks *= opt.cores_per_socket;
 			opt.ntasks *= opt.threads_per_core;
 			opt.ntasks_set = true;
+			if (opt.verbose)
+				info("Number of tasks implicitly set to %d",
+				     opt.ntasks);
 		} else if (opt.ntasks_per_node != NO_VAL) {
 			opt.ntasks *= opt.ntasks_per_node;
 			opt.ntasks_set = true;

@@ -42,6 +42,9 @@ testsuite_subtest_details:    add details of subtest in the summary [fail]
                               possible values: all, fail, fail_skip or none
 testsuite_testproc_details:   add details of testprocs in the summary [fail]
                               possible values: all, fail, fail_skip or none
+testsuite_testproc_log_calls: yes to always print the whole testproc call,
+                              no to never print it, or [ignore_skips] to print
+                              all but the skipped testprocs
 testsuite_user:               a system username that is NOT on the Slurm DB
                               that may be used to sudo commands as him
                               instead of current user (see check_run_as_user)
@@ -399,6 +402,7 @@ test7.20   Test lua JobSubmitPlugin
 test7.21   Test SPANK plugins that link against libslurm
 test7.22   Test basic functionality of backfill scheduler
 test7.23   Test min_mem_per_{cpu,node} in lua JobSubmitPlugin
+test7.24   Test that SPANK plugins return codes are reported to user
 
 test8.#    Testing of advanced reservation functionality.
 =========================================================

@@ -2813,26 +2813,34 @@ extern uint16_t preempt_mode_num(const char *preempt_mode)
 extern char *log_num2string(uint16_t inx)
 {
 	switch (inx) {
-	case 0:
+	case LOG_LEVEL_QUIET:
 		return "quiet";
-	case 1:
+	case LOG_LEVEL_FATAL:
 		return "fatal";
-	case 2:
+	case LOG_LEVEL_ERROR:
 		return "error";
-	case 3:
+	case LOG_LEVEL_INFO:
 		return "info";
-	case 4:
+	case LOG_LEVEL_VERBOSE:
 		return "verbose";
-	case 5:
+	case LOG_LEVEL_DEBUG:
 		return "debug";
-	case 6:
+	case LOG_LEVEL_DEBUG2:
 		return "debug2";
-	case 7:
+	case LOG_LEVEL_DEBUG3:
 		return "debug3";
-	case 8:
+	case LOG_LEVEL_DEBUG4:
 		return "debug4";
-	case 9:
+	case LOG_LEVEL_DEBUG5:
 		return "debug5";
+	case LOG_LEVEL_END:
+		/*
+		 * "(null)" is printed through 'scontrol show config' to
+		 * to indicate a given value has not been set. Convert
+		 * LOG_LEVEL_END to "(null)" to indicate a given logging
+		 * channel is disabled, rather than printing "unknown".
+		 */
+		return "(null)";
 	default:
 		return "unknown";
 	}
@@ -3484,6 +3492,8 @@ extern char *bb_state_string(uint16_t state)
 		return "staged-in";
 	if (state == BB_STATE_PRE_RUN)
 		return "pre-run";
+	if (state == BB_STATE_ALLOC_REVOKE)
+		return "alloc-revoke";
 	if (state == BB_STATE_RUNNING)
 		return "running";
 	if (state == BB_STATE_SUSPEND)
@@ -3523,6 +3533,8 @@ extern uint16_t bb_state_num(char *tok)
 		return BB_STATE_STAGED_IN;
 	if (!xstrcasecmp(tok, "pre-run"))
 		return BB_STATE_PRE_RUN;
+	if (!xstrcasecmp(tok, "alloc-revoke"))
+		return BB_STATE_ALLOC_REVOKE;
 	if (!xstrcasecmp(tok, "running"))
 		return BB_STATE_RUNNING;
 	if (!xstrcasecmp(tok, "suspend"))

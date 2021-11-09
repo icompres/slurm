@@ -111,11 +111,12 @@ static void	_job_queue_append(List job_queue, job_record_t *job_ptr,
 				  part_record_t *part_ptr, uint32_t priority);
 static bool	_job_runnable_test1(job_record_t *job_ptr, bool clear_start);
 static bool	_job_runnable_test2(job_record_t *job_ptr, bool check_min_time);
-static bool	_scan_depend(List dependency_list, uint32_t job_id);
+static bool	_scan_depend(List dependency_list, job_record_t *job_ptr);
 static void *	_sched_agent(void *args);
 static int	_schedule(bool full_queue);
 static int	_valid_batch_features(job_record_t *job_ptr, bool can_reboot);
-static int	_valid_feature_list(job_record_t *job_ptr, bool can_reboot);
+static int	_valid_feature_list(job_record_t *job_ptr, List feature_list,
+				    bool can_reboot);
 static int	_valid_node_feature(char *feature, bool can_reboot);
 #ifndef HAVE_FRONT_END
 static void *	_wait_boot(void *arg);
@@ -850,9 +851,6 @@ static void *_sched_agent(void *args)
 			} else {
 				slurm_cond_wait(&sched_cond, &sched_mutex);
 			}
-
-			if (slurmctld_config.shutdown_time)
-				return NULL;
 		}
 
 		full_queue = sched_full_queue;
@@ -963,6 +961,19 @@ extern void fill_array_reasons(job_record_t *job_ptr,
 	}
 }
 
+static job_queue_rec_t *_create_job_queue_rec(job_queue_req_t *job_queue_req)
+{
+	job_queue_rec_t *job_queue_rec = xmalloc(sizeof(*job_queue_rec));
+	job_queue_rec->array_task_id = job_queue_req->job_ptr->array_task_id;
+	job_queue_rec->job_id   = job_queue_req->job_ptr->job_id;
+	job_queue_rec->job_ptr  = job_queue_req->job_ptr;
+	job_queue_rec->part_ptr = job_queue_req->part_ptr;
+	job_queue_rec->priority = job_queue_req->prio;
+	job_queue_rec->resv_ptr = job_queue_req->resv_ptr;
+
+	return job_queue_rec;
+}
+
 extern void job_queue_append_internal(job_queue_req_t *job_queue_req)
 {
 	job_queue_rec_t *job_queue_rec;
@@ -972,13 +983,17 @@ extern void job_queue_append_internal(job_queue_req_t *job_queue_req)
 	xassert(job_queue_req->job_queue);
 	xassert(job_queue_req->part_ptr);
 
-	job_queue_rec = xmalloc(sizeof(job_queue_rec_t));
-	job_queue_rec->array_task_id = job_queue_req->job_ptr->array_task_id;
-	job_queue_rec->job_id   = job_queue_req->job_ptr->job_id;
-	job_queue_rec->job_ptr  = job_queue_req->job_ptr;
-	job_queue_rec->part_ptr = job_queue_req->part_ptr;
-	job_queue_rec->priority = job_queue_req->prio;
-	job_queue_rec->resv_ptr = job_queue_req->resv_ptr;
+	if (job_queue_req->job_ptr->details &&
+	    job_queue_req->job_ptr->details->prefer) {
+		job_record_t *job_ptr = job_queue_req->job_ptr;
+		job_queue_rec = _create_job_queue_rec(job_queue_req);
+		job_queue_rec->features = job_ptr->details->prefer;
+		job_queue_rec->feature_list = job_ptr->details->prefer_list;
+		list_append(job_queue_req->job_queue, job_queue_rec);
+	}
+
+	job_queue_rec = _create_job_queue_rec(job_queue_req);
+
 	list_append(job_queue_req->job_queue, job_queue_rec);
 }
 
@@ -1412,6 +1427,18 @@ next_part:
 			part_ptr = job_queue_rec->part_ptr;
 			job_ptr->priority = job_queue_rec->priority;
 
+			if (job_queue_rec->features) {
+				job_ptr->details->features_use =
+					job_queue_rec->features;
+				job_ptr->details->feature_list_use =
+					job_queue_rec->feature_list;
+			} else {
+				job_ptr->details->features_use =
+					job_ptr->details->features;
+				job_ptr->details->feature_list_use =
+					job_ptr->details->feature_list;
+			}
+
 			if (job_ptr->resv_list)
 				job_queue_rec_resv_list(job_queue_rec);
 			else
@@ -1745,6 +1772,17 @@ skip_start:
 			if (job_ptr->start_time == 0) {
 				job_ptr->start_time = last_job_sched_start;
 				bb_wait_cnt++;
+				/*
+				 * Since start time wasn't set yet until this
+				 * point, this means that the job hasn't had a
+				 * chance to start stage-in yet. Clear
+				 * reject_array_job so that other jobs in this
+				 * array (if it was an array) may also have
+				 * a chance to have a start time set and
+				 * therefore have a chance to start stage-in.
+				 */
+				reject_array_job = NULL;
+				reject_array_part = NULL;
 			}
 			sched_debug3("%pJ. State=%s. Reason=%s. Priority=%u.",
 				     job_ptr,
@@ -2590,7 +2628,7 @@ extern int make_batch_job_cred(batch_job_launch_msg_t *launch_msg_ptr,
 	cred_arg.gid       = launch_msg_ptr->gid;
 	cred_arg.pw_name   = launch_msg_ptr->user_name;
 	cred_arg.x11       = job_ptr->details->x11;
-	cred_arg.job_constraints     = job_ptr->details->features;
+	cred_arg.job_constraints     = job_ptr->details->features_use;
 	cred_arg.job_hostlist        = job_resrcs_ptr->nodes;
 	cred_arg.job_core_bitmap     = job_resrcs_ptr->core_bitmap;
 	cred_arg.job_core_spec       = job_ptr->details->core_spec;
@@ -2615,12 +2653,8 @@ extern int make_batch_job_cred(batch_job_launch_msg_t *launch_msg_ptr,
 	cred_arg.job_gres_list       = job_ptr->gres_list_alloc;
 /*	cred_arg.step_gres_list      = NULL; */
 
-#ifdef HAVE_FRONT_END
 	xassert(job_ptr->batch_host);
 	cred_arg.step_hostlist       = job_ptr->batch_host;
-#else
-	cred_arg.step_hostlist       = launch_msg_ptr->nodes;
-#endif
 	cred_arg.step_core_bitmap    = job_resrcs_ptr->core_bitmap;
 	cred_arg.step_mem_limit      = job_ptr->details->pn_min_memory;
 
@@ -3239,6 +3273,51 @@ static job_record_t *_find_dependent_job_ptr(uint32_t job_id,
 }
 
 /*
+ * job_ptr - job that is getting a new dependency
+ * dep_job_ptr - pointer to the job that job_ptr wants to depend on
+ *   - This can be NULL, for example if it's a remote dependency. That's okay.
+ * job_id - job_id of the dependency string
+ * array_task_id - array_task_id of the dependency string
+ *   - Equals NO_VAL if the dependency isn't a job array.
+ *   - Equals INFINITE if the dependency is the whole job array.
+ *   - Otherwise this equals a specific task of the job array (0, 1, 2, etc.)
+ *
+ * RET true if job_ptr is the same job as the new dependency, false otherwise.
+ *
+ * Example:
+ *   scontrol update jobid=123 dependency=afterok:456_5
+ *
+ * job_ptr points to the job record for jobid=123.
+ * dep_job_ptr points to the job record for 456_5.
+ * job_id == 456. (This is probably different from dep_job_ptr->job_id.)
+ * array_task_id == 5.
+ */
+static bool _depends_on_same_job(job_record_t *job_ptr,
+				 job_record_t *dep_job_ptr,
+				 uint32_t job_id, uint32_t array_task_id)
+{
+	if (array_task_id == INFINITE) {
+		/* job_ptr wants to set a dependency on a whole job array */
+		if ((job_ptr->array_task_id != NO_VAL) ||
+		    (job_ptr->array_recs)) {
+			/*
+			 * job_ptr is a specific task in a job array, or is
+			 * the meta job of a job array.
+			 * Test if job_ptr belongs to the array indicated by
+			 * the dependency string's "job_id"
+			 */
+			return (job_ptr->array_job_id == job_id);
+		} else {
+			/* job_ptr is a normal job */
+			return (job_ptr == dep_job_ptr);
+		}
+	} else {
+		/* Doesn't depend on a whole job array; test normally */
+		return (job_ptr == dep_job_ptr);
+	}
+}
+
+/*
  * The new dependency format is:
  *
  * <type:job_id[:job_id][,type:job_id[:job_id]]> or
@@ -3273,15 +3352,23 @@ static void _parse_dependency_jobid_new(job_record_t *job_ptr,
 			}
 		} else
 			array_task_id = NO_VAL;
-		if ((tmp == NULL) ||
-		    (job_id == 0) || (job_id == job_ptr->job_id) ||
+		if ((tmp == NULL) || (job_id == 0) ||
 		    ((tmp[0] != '\0') && (tmp[0] != ',') &&
 		     (tmp[0] != '?')  && (tmp[0] != ':') &&
 		     (tmp[0] != '+') && (tmp[0] != '('))) {
 			*rc = ESLURM_DEPENDENCY;
 			break;
 		}
+		/*
+		 * _find_dependent_job_ptr() may modify array_task_id, so check
+		 * if the job is the same after that.
+		 */
 		dep_job_ptr = _find_dependent_job_ptr(job_id, &array_task_id);
+		if (_depends_on_same_job(job_ptr, dep_job_ptr, job_id,
+					 array_task_id)) {
+			*rc = ESLURM_DEPENDENCY;
+			break;
+		}
 		if ((depend_type == SLURM_DEPEND_EXPAND) &&
 		    ((expand_cnt++ > 0) || (dep_job_ptr == NULL) ||
 		     (!IS_JOB_RUNNING(dep_job_ptr))		||
@@ -3430,13 +3517,20 @@ static void _parse_dependency_jobid_old(job_record_t *job_ptr,
 		array_task_id = NO_VAL;
 	}
 	*sep_ptr = tmp;
-	if ((tmp == NULL) ||
-	    (job_id == 0) || (job_id == job_ptr->job_id) ||
+	if ((tmp == NULL) || (job_id == 0) ||
 	    ((tmp[0] != '\0') && (tmp[0] != ','))) {
 		*rc = ESLURM_DEPENDENCY;
 		return;
 	}
+	/*
+	 * _find_dependent_job_ptr() may modify array_task_id, so check
+	 * if the job is the same after that.
+	 */
 	dep_job_ptr = _find_dependent_job_ptr(job_id, &array_task_id);
+	if (_depends_on_same_job(job_ptr, dep_job_ptr, job_id, array_task_id)) {
+		*rc = ESLURM_DEPENDENCY;
+		return;
+	}
 
 	dep_ptr = xmalloc(sizeof(depend_spec_t));
 	dep_ptr->array_task_id = array_task_id;
@@ -3734,8 +3828,8 @@ extern int update_job_dependency(job_record_t *job_ptr, char *new_depend)
 
 	if (rc == SLURM_SUCCESS) {
 		/* test for circular dependencies (e.g. A -> B -> A) */
-		(void) _scan_depend(NULL, job_ptr->job_id);
-		if (_scan_depend(new_depend_list, job_ptr->job_id))
+		(void) _scan_depend(NULL, job_ptr);
+		if (_scan_depend(new_depend_list, job_ptr))
 			rc = ESLURM_CIRCULAR_DEPENDENCY;
 	}
 
@@ -3752,10 +3846,10 @@ extern int update_job_dependency(job_record_t *job_ptr, char *new_depend)
 	return rc;
 }
 
-/* Return true if job_id is found in dependency_list.
+/* Return true if the job job_ptr is found in dependency_list.
  * Pass NULL dependency list to clear the counter.
  * Execute recursively for each dependent job */
-static bool _scan_depend(List dependency_list, uint32_t job_id)
+static bool _scan_depend(List dependency_list, job_record_t *job_ptr)
 {
 	static int job_counter = 0;
 	bool rc = false;
@@ -3769,7 +3863,7 @@ static bool _scan_depend(List dependency_list, uint32_t job_id)
 		return false;
 	}
 
-	xassert(job_id);
+	xassert(job_ptr);
 	iter = list_iterator_create(dependency_list);
 	while (!rc && (dep_ptr = list_next(iter))) {
 		if (dep_ptr->job_id == 0)	/* Singleton */
@@ -3782,19 +3876,20 @@ static bool _scan_depend(List dependency_list, uint32_t job_id)
 		 */
 		if (!dep_ptr->job_ptr)
 			continue;
-		if (dep_ptr->job_id == job_id)
-			rc = true;
-		else if ((dep_ptr->job_id != dep_ptr->job_ptr->job_id) ||
-			 (dep_ptr->job_ptr->magic != JOB_MAGIC))
+		if ((rc = _depends_on_same_job(job_ptr, dep_ptr->job_ptr,
+					       dep_ptr->job_id,
+					       dep_ptr->array_task_id)))
+			break;
+		else if (dep_ptr->job_ptr->magic != JOB_MAGIC)
 			continue;	/* purged job, ptr not yet cleared */
 		else if (!IS_JOB_FINISHED(dep_ptr->job_ptr) &&
 			 dep_ptr->job_ptr->details &&
 			 dep_ptr->job_ptr->details->depend_list) {
 			rc = _scan_depend(dep_ptr->job_ptr->details->
-					  depend_list, job_id);
+					  depend_list, job_ptr);
 			if (rc) {
-				info("circular dependency: %pJ is dependent upon JobId=%u",
-				     dep_ptr->job_ptr, job_id);
+				info("circular dependency: %pJ is dependent upon %pJ",
+				     dep_ptr->job_ptr, job_ptr);
 			}
 		}
 	}
@@ -3869,15 +3964,13 @@ static int _part_weight_sort(void *x, void *y)
 }
 
 /*
- * Determine if a pending job will run using only the specified nodes
- * (in job_desc_msg->req_nodes), build response message and return
- * SLURM_SUCCESS on success. Otherwise return an error code. Caller
- * must free response message
+ * Determine if a pending job will run using only the specified nodes, build
+ * response message and return SLURM_SUCCESS on success. Otherwise return an
+ * error code. Caller must free response message.
  */
-extern int job_start_data(job_desc_msg_t *job_desc_msg,
+extern int job_start_data(job_record_t *job_ptr,
 			  will_run_response_msg_t **resp)
 {
-	job_record_t *job_ptr;
 	part_record_t *part_ptr;
 	bitstr_t *active_bitmap = NULL, *avail_bitmap = NULL;
 	bitstr_t *resv_bitmap = NULL;
@@ -3889,7 +3982,6 @@ extern int job_start_data(job_desc_msg_t *job_desc_msg,
 	bool resv_overlap = false;
 	ListIterator iter = NULL;
 
-	job_ptr = find_job_record(job_desc_msg->job_id);
 	if (job_ptr == NULL)
 		return ESLURM_INVALID_JOB_ID;
 
@@ -3916,17 +4008,17 @@ next_part:
 		return ESLURM_INVALID_PARTITION_NAME;
 	}
 
-	if ((job_desc_msg->req_nodes == NULL) ||
-	    (job_desc_msg->req_nodes[0] == '\0')) {
+	if (job_ptr->details->req_nodes && job_ptr->details->req_nodes[0]) {
+		if (node_name2bitmap(job_ptr->details->req_nodes, false,
+				     &avail_bitmap) != 0) {
+			if (iter)
+				list_iterator_destroy(iter);
+			return ESLURM_INVALID_NODE_NAME;
+		}
+	} else {
 		/* assume all nodes available to job for testing */
 		avail_bitmap = bit_alloc(node_record_count);
 		bit_nset(avail_bitmap, 0, (node_record_count - 1));
-	} else if (node_name2bitmap(job_desc_msg->req_nodes, false,
-				    &avail_bitmap) != 0) {
-		/* Don't need to check for each partition */
-		if (iter)
-			list_iterator_destroy(iter);
-		return ESLURM_INVALID_NODE_NAME;
 	}
 
 	/* Consider only nodes in this job's partition */
@@ -4128,7 +4220,8 @@ extern bitstr_t *node_features_reboot(job_record_t *job_ptr)
 	if (feature_node_bitmap == NULL) /* No nodes under NodeFeaturesPlugin */
 		return NULL;
 
-	reboot_features = node_features_g_job_xlate(job_ptr->details->features);
+	reboot_features = node_features_g_job_xlate(
+		job_ptr->details->features_use);
 	tmp_bitmap = build_active_feature_bitmap2(reboot_features);
 	xfree(reboot_features);
 	boot_node_bitmap = bit_copy(job_ptr->node_bitmap);
@@ -4255,10 +4348,10 @@ extern int reboot_job_nodes(job_record_t *job_ptr)
 		node_ptr->boot_req_time = now;
 	}
 
-	if (job_ptr->details->features &&
+	if (job_ptr->details->features_use &&
 	    node_features_g_user_update(job_ptr->user_id)) {
 		reboot_features = node_features_g_job_xlate(
-			job_ptr->details->features);
+			job_ptr->details->features_use);
 		if (reboot_features)
 			feature_node_bitmap = node_features_g_get_node_bitmap();
 		if (feature_node_bitmap)
@@ -4559,30 +4652,48 @@ extern List feature_list_copy(List feature_list_src)
  * OUT details->feature_list
  * RET error code
  */
-extern int build_feature_list(job_record_t *job_ptr)
+extern int build_feature_list(job_record_t *job_ptr, bool prefer)
 {
 	struct job_details *detail_ptr = job_ptr->details;
 	char *tmp_requested, *str_ptr, *feature = NULL;
+	char *features;
+	List *feature_list;
+	int feature_err;
 	int bracket = 0, count = 0, i, paren = 0, rc;
 	bool fail = false;
 	job_feature_t *feat;
 	bool can_reboot;
 
-	if (!detail_ptr || !detail_ptr->features) {	/* no constraints */
+	/* no hard constraints */
+	if (!detail_ptr || (!detail_ptr->features && !detail_ptr->prefer)) {
 		if (job_ptr->batch_features)
 			return ESLURM_BATCH_CONSTRAINT;
 		return SLURM_SUCCESS;
 	}
-	if (detail_ptr->feature_list)		/* already processed */
+
+	if (prefer) {
+		features = detail_ptr->prefer;
+		feature_list = &detail_ptr->prefer_list;
+		feature_err = ESLURM_INVALID_PREFER;
+	} else {
+		features = detail_ptr->features;
+		feature_list = &detail_ptr->feature_list;
+		feature_err = ESLURM_INVALID_FEATURE;
+	}
+
+	if (!features) /* The other constraint is non NULL. */
+		return SLURM_SUCCESS;
+
+	if (*feature_list)		/* already processed */
 		return SLURM_SUCCESS;
 
 	/* Use of commas separator is a common error. Replace them with '&' */
-	while ((str_ptr = strstr(detail_ptr->features, ",")))
+	while ((str_ptr = strstr(features, ",")))
 		str_ptr[0] = '&';
 
 	can_reboot = node_features_g_user_update(job_ptr->user_id);
-	tmp_requested = xstrdup(detail_ptr->features);
-	detail_ptr->feature_list = list_create(feature_list_delete);
+	tmp_requested = xstrdup(features);
+	*feature_list = list_create(feature_list_delete);
 	for (i = 0; ; i++) {
 		if (tmp_requested[i] == '*') {
 			tmp_requested[i] = '\0';
@@ -4610,16 +4721,20 @@ extern int build_feature_list(job_record_t *job_ptr)
 				feat->op_code = FEATURE_OP_XAND;
 			else
 				feat->op_code = FEATURE_OP_AND;
-			list_append(detail_ptr->feature_list, feat);
+			list_append(*feature_list, feat);
 			feature = NULL;
 			count = 0;
 		} else if (tmp_requested[i] == '|') {
+			bool changeable;
+
 			tmp_requested[i] = '\0';
 			if (feature == NULL) {
 				fail = true;
 				break;
 			}
-			if (paren && (node_features_g_count() > 0)) {
+			changeable = node_features_g_changeable_feature(
+				feature);
+			if (paren && changeable) {
 				/*
 				 * Most (but not all) of the logic to support
 				 * OR within parenthesis works today except when
@@ -4631,8 +4746,7 @@ extern int build_feature_list(job_record_t *job_ptr)
 			}
 			feat = xmalloc(sizeof(job_feature_t));
 			feat->name = xstrdup(feature);
-			feat->changeable = node_features_g_changeable_feature(
-				feature);
+			feat->changeable = changeable;
 			feat->count = count;
 			feat->paren = paren;
 			if (paren)
@@ -4641,7 +4755,7 @@ extern int build_feature_list(job_record_t *job_ptr)
 				feat->op_code = FEATURE_OP_XOR;
 			else
 				feat->op_code = FEATURE_OP_OR;
-			list_append(detail_ptr->feature_list, feat);
+			list_append(*feature_list, feat);
 			feature = NULL;
 			count = 0;
 		} else if (tmp_requested[i] == '[') {
@@ -4656,13 +4770,13 @@ extern int build_feature_list(job_record_t *job_ptr)
 			if ((feature == NULL) || (bracket == 0)) {
 				if (job_ptr->job_id) {
 					verbose("%pJ invalid constraint %s",
-						job_ptr, detail_ptr->features);
+						job_ptr, features);
 				} else {
 					verbose("Reservation invalid constraint %s",
-						detail_ptr->features);
+						features);
 				}
 				xfree(tmp_requested);
-				return ESLURM_INVALID_FEATURE;
+				return feature_err;
 			}
 			bracket--;
 		} else if (tmp_requested[i] == '(') {
@@ -4688,7 +4802,7 @@ extern int build_feature_list(job_record_t *job_ptr)
 				feat->count = count;
 				feat->paren = paren;
 				feat->op_code = FEATURE_OP_END;
-				list_append(detail_ptr->feature_list, feat);
+				list_append(*feature_list, feat);
 			}
 			break;
 		} else if (feature == NULL) {
@@ -4699,41 +4813,48 @@ extern int build_feature_list(job_record_t *job_ptr)
 	if (fail) {
 		if (job_ptr->job_id) {
 			verbose("%pJ invalid constraint %s",
-				job_ptr, detail_ptr->features);
+				job_ptr, features);
 		} else {
 			verbose("Reservation invalid constraint %s",
-				detail_ptr->features);
+				features);
 		}
 		return ESLURM_INVALID_FEATURE;
 	}
 	if (bracket != 0) {
 		if (job_ptr->job_id) {
 			verbose("%pJ constraint has unbalanced brackets: %s",
-				job_ptr, detail_ptr->features);
+				job_ptr, features);
 		} else {
 			verbose("Reservation constraint has unbalanced brackets: %s",
-				detail_ptr->features);
+				features);
 		}
 		return ESLURM_INVALID_FEATURE;
 	}
 	if (paren != 0) {
 		if (job_ptr->job_id) {
 			verbose("%pJ constraint has unbalanced parenthesis: %s",
-				job_ptr, detail_ptr->features);
+				job_ptr, features);
 		} else {
 			verbose("Reservation constraint has unbalanced parenthesis: %s",
-				detail_ptr->features);
+				features);
 		}
-		return ESLURM_INVALID_FEATURE;
+		return feature_err;
 	}
 
 	if (job_ptr->batch_features) {
+		detail_ptr->feature_list_use = *feature_list;
+		detail_ptr->features_use = features;
 		rc = _valid_batch_features(job_ptr, can_reboot);
+		detail_ptr->feature_list_use = NULL;
+		detail_ptr->features_use = NULL;
 		if (rc != SLURM_SUCCESS)
 			return rc;
 	}
 
-	return _valid_feature_list(job_ptr, can_reboot);
+	rc = _valid_feature_list(job_ptr, *feature_list, can_reboot);
+	if (rc == ESLURM_INVALID_FEATURE)
+		return feature_err;
+	return rc;
 }
 
 /*
@@ -4766,7 +4887,7 @@ static int _valid_batch_features(job_record_t *job_ptr, bool can_reboot)
 
 	if (!job_ptr->batch_features)
 		return SLURM_SUCCESS;
-	if (!job_ptr->details || !job_ptr->details->feature_list)
+	if (!job_ptr->details || !job_ptr->details->feature_list_use)
 		return ESLURM_BATCH_CONSTRAINT;
 
 	if (strchr(job_ptr->batch_features, '|'))
@@ -4774,7 +4895,7 @@ static int _valid_batch_features(job_record_t *job_ptr, bool can_reboot)
 	tmp = xstrdup(job_ptr->batch_features);
 	tok = strtok_r(tmp, "&|", &save_ptr);
 	while (tok) {
-		if (!list_find_first(job_ptr->details->feature_list,
+		if (!list_find_first(job_ptr->details->feature_list_use,
 				     _match_job_feature, tok)) {
 			rc = ESLURM_BATCH_CONSTRAINT;
 			break;
@@ -4797,14 +4918,15 @@ static int _valid_batch_features(job_record_t *job_ptr, bool can_reboot)
 	return rc;
 }
 
-static int _valid_feature_list(job_record_t *job_ptr, bool can_reboot)
+static int _valid_feature_list(job_record_t *job_ptr, List feature_list,
+			       bool can_reboot)
 {
-	List feature_list = job_ptr->details->feature_list;
 	ListIterator feat_iter;
 	job_feature_t *feat_ptr;
 	char *buf = NULL;
 	int bracket = 0, paren = 0;
 	int rc = SLURM_SUCCESS;
+	bool has_xand = false, has_xor = false;
 
 	if (feature_list == NULL) {
 		if (job_ptr->job_id)
@@ -4820,7 +4942,7 @@ static int _valid_feature_list(job_record_t *job_ptr, bool can_reboot)
 		    (feat_ptr->op_code == FEATURE_OP_XAND)) {
 			if (bracket == 0)
 				xstrcat(buf, "[");
-			bracket = 1;
+			bracket = feat_ptr->paren + 1;
 		}
 		if (feat_ptr->paren > paren) {
 			xstrcat(buf, "(");
@@ -4835,11 +4957,20 @@ static int _valid_feature_list(job_record_t *job_ptr, bool can_reboot)
 			rc = _valid_node_feature(feat_ptr->name, can_reboot);
 		if (feat_ptr->count)
 			xstrfmtcat(buf, "*%u", feat_ptr->count);
-		if (bracket &&
+		if (feat_ptr->op_code == FEATURE_OP_XAND && !feat_ptr->count)
+			rc = ESLURM_INVALID_FEATURE;
+		if (feat_ptr->op_code == FEATURE_OP_XOR && feat_ptr->count)
+			rc = ESLURM_INVALID_FEATURE;
+		if ((bracket > paren) &&
 		    ((feat_ptr->op_code != FEATURE_OP_XOR) &&
 		     (feat_ptr->op_code != FEATURE_OP_XAND))) {
+			if ((has_xand && !feat_ptr->count) ||
+			    (has_xor && feat_ptr->count))
+				rc = ESLURM_INVALID_FEATURE;
 			xstrcat(buf, "]");
 			bracket = 0;
+			has_xand = false;
+			has_xor = false;
 		}
 		if ((feat_ptr->op_code == FEATURE_OP_AND) ||
 		    (feat_ptr->op_code == FEATURE_OP_XAND))
@@ -4847,6 +4978,10 @@ static int _valid_feature_list(job_record_t *job_ptr, bool can_reboot)
 		else if ((feat_ptr->op_code == FEATURE_OP_OR) ||
 			 (feat_ptr->op_code == FEATURE_OP_XOR))
 			xstrcat(buf, "|");
+		if (feat_ptr->op_code == FEATURE_OP_XAND)
+			has_xand = true;
+		if (feat_ptr->op_code == FEATURE_OP_XOR)
+			has_xor = true;
 	}
 	list_iterator_destroy(feat_iter);
 

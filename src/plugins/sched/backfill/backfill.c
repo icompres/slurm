@@ -359,10 +359,10 @@ static int _num_feature_count(job_record_t *job_ptr, bool *has_xand,
 
 	*has_xand = false;
 	*has_xor = false;
-	if (detail_ptr->feature_list == NULL)	/* no constraints */
+	if (detail_ptr->feature_list_use == NULL)	/* no constraints */
 		return rc;
 
-	feat_iter = list_iterator_create(detail_ptr->feature_list);
+	feat_iter = list_iterator_create(detail_ptr->feature_list_use);
 	while ((feat_ptr = (job_feature_t *) list_next(feat_iter))) {
 		if (feat_ptr->count)
 			rc++;
@@ -400,7 +400,7 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 	bool has_xand = false, has_xor = false;
 	int feat_cnt = _num_feature_count(job_ptr, &has_xand, &has_xor);
 	struct job_details *detail_ptr = job_ptr->details;
-	List feature_cache = detail_ptr->feature_list;
+	List feature_cache = detail_ptr->feature_list_use;
 	List preemptee_candidates = NULL;
 	ListIterator feat_iter;
 	job_feature_t *feat_ptr;
@@ -420,12 +420,12 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 		feat_iter = list_iterator_create(feature_cache);
 		while ((feat_ptr = (job_feature_t *) list_next(feat_iter)) &&
 		       (rc == SLURM_SUCCESS)) {
-			detail_ptr->feature_list =
+			detail_ptr->feature_list_use =
 				list_create(feature_list_delete);
 			feature_base = xmalloc(sizeof(job_feature_t));
 			feature_base->name = xstrdup(feat_ptr->name);
 			feature_base->op_code = feat_ptr->op_code;
-			list_append(detail_ptr->feature_list, feature_base);
+			list_append(detail_ptr->feature_list_use, feature_base);
 			feat_min_node = feat_ptr->count;
 			while ((feat_ptr->paren > 0) &&
 			       ((feat_ptr = (job_feature_t *)
@@ -434,7 +434,7 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 				feature_base->name = xstrdup(feat_ptr->name);
 				feature_base->op_code = feat_ptr->op_code;
 				feat_min_node = feat_ptr->count;
-				list_append(detail_ptr->feature_list,
+				list_append(detail_ptr->feature_list_use,
 					    feature_base);
 			}
 			feature_base->op_code = FEATURE_OP_END;
@@ -471,7 +471,7 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 			*avail_bitmap = bit_copy(tmp_bitmap);
 			if (low_bitmap)
 				bit_and_not(*avail_bitmap, low_bitmap);
-			list_destroy(detail_ptr->feature_list);
+			list_destroy(detail_ptr->feature_list_use);
 		}
 		list_iterator_destroy(feat_iter);
 
@@ -480,7 +480,7 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 		else
 			feat_node_cnt = 0;
 		if (feat_node_cnt < req_nodes) {
-			detail_ptr->feature_list = NULL;
+			detail_ptr->feature_list_use = NULL;
 			rc = select_g_job_test(job_ptr, *avail_bitmap,
 					       min_nodes - feat_node_cnt,
 					       max_nodes - feat_node_cnt,
@@ -511,7 +511,7 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 		}
 
 		/* Restore the original feature information */
-		detail_ptr->feature_list = feature_cache;
+		detail_ptr->feature_list_use = feature_cache;
 	} else if (has_xor) {
 		/*
 		 * Cache the feature information and test the individual
@@ -523,19 +523,19 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 		preemptee_candidates = slurm_find_preemptable_jobs(job_ptr);
 		feat_iter = list_iterator_create(feature_cache);
 		while ((feat_ptr = (job_feature_t *) list_next(feat_iter))) {
-			detail_ptr->feature_list =
+			detail_ptr->feature_list_use =
 				list_create(feature_list_delete);
 			feature_base = xmalloc(sizeof(job_feature_t));
 			feature_base->name = xstrdup(feat_ptr->name);
 			feature_base->op_code = feat_ptr->op_code;
-			list_append(detail_ptr->feature_list, feature_base);
+			list_append(detail_ptr->feature_list_use, feature_base);
 			while ((feat_ptr->paren > 0) &&
 			       ((feat_ptr = (job_feature_t *)
 					    list_next(feat_iter)))) {
 				feature_base = xmalloc(sizeof(job_feature_t));
 				feature_base->name = xstrdup(feat_ptr->name);
 				feature_base->op_code = feat_ptr->op_code;
-				list_append(detail_ptr->feature_list,
+				list_append(detail_ptr->feature_list_use,
 					    feature_base);
 			}
 			feature_base->op_code = FEATURE_OP_END;
@@ -560,7 +560,7 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 			}
 			FREE_NULL_BITMAP(*avail_bitmap);
 			*avail_bitmap = bit_copy(tmp_bitmap);
-			list_destroy(detail_ptr->feature_list);
+			list_destroy(detail_ptr->feature_list_use);
 		}
 		list_iterator_destroy(feat_iter);
 		FREE_NULL_LIST(preemptee_candidates);
@@ -576,8 +576,8 @@ static int  _try_sched(job_record_t *job_ptr, bitstr_t **avail_bitmap,
 		}
 
 		/* Restore the original feature information */
-		detail_ptr->feature_list = feature_cache;
-	} else if (detail_ptr->feature_list) {
+		detail_ptr->feature_list_use = feature_cache;
+	} else if (detail_ptr->feature_list_use) {
 		if ((job_req_node_filter(job_ptr, *avail_bitmap, true) !=
 		     SLURM_SUCCESS) ||
 		    (bit_set_count(*avail_bitmap) < min_nodes)) {
@@ -1955,6 +1955,15 @@ static int _attempt_backfill(void)
 			job_no_reserve = TEST_NOW_ONLY;
 		}
 
+		/*
+		 * If we are trying to schedule preferred features don't
+		 * reserve.
+		 */
+		if (job_ptr->details->prefer &&
+		    (job_ptr->details->features_use ==
+		     job_ptr->details->prefer))
+			job_no_reserve = TEST_NOW_ONLY;
+
 		/* If partition data is needed and not yet initialized, do so */
 		if (!job_ptr->part_ptr->bf_data &&
 		    (bf_job_part_count_reserve ||
@@ -2440,16 +2449,26 @@ next_task:
 		if ((job_ptr->start_time <= now) &&
 		    ((bb = bb_g_job_test_stage_in(job_ptr, true)) != 1)) {
 			if (job_ptr->state_reason != WAIT_NO_REASON) {
+				/*
+				 * Don't change state_reason if it was already
+				 * set.
+				 */
 				;
 			} else if (bb == -1) {
+				/*
+				 * Set reason now instead of in if (bb == -1)
+				 * below for the sched_debug3()
+				 */
 				xfree(job_ptr->state_desc);
 				job_ptr->state_reason =
 					WAIT_BURST_BUFFER_RESOURCE;
-				job_ptr->start_time =
-					bb_g_job_get_est_start(job_ptr);
 			} else {	/* bb == 0 */
 				xfree(job_ptr->state_desc);
 				job_ptr->state_reason=WAIT_BURST_BUFFER_STAGING;
+				/*
+				 * Cannot start now, set start time in the
+				 * future.
+				 */
 				job_ptr->start_time = now + 1;
 			}
 			sched_debug3("%pJ. State=%s. Reason=%s. Priority=%u.",
@@ -2460,8 +2479,25 @@ next_task:
 			last_job_update = now;
 			_set_job_time_limit(job_ptr, orig_time_limit);
 			later_start = 0;
-			if (bb == -1)
+			if (bb == -1) {
+				/*
+				 * bb == -1 means that burst buffer stage-in
+				 * hasn't started yet. Set an estimated start
+				 * time so stage-in can start.
+				 *
+				 * Clear reject_array_job; otherwise we'll skip
+				 * looking at other jobs in this array (if this
+				 * is a job array), therefore we won't set
+				 * estimated start times, therefore we won't be
+				 * able to start stage-in for any other jobs in
+				 * this array.
+				 */
+				job_ptr->start_time =
+					bb_g_job_get_est_start(job_ptr);
+				reject_array_job = NULL;
+				reject_array_part = NULL;
 				continue;
+			}
 		} else if ((job_ptr->het_job_id == 0) &&
 			   (job_ptr->start_time <= now)) { /* Can start now */
 			uint32_t save_time_limit = job_ptr->time_limit;

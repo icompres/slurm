@@ -290,6 +290,7 @@ cset testsuite_subtest_fatal   false
 # Set to all, fail_skip, fail or none print datails of subtests and testprocs
 cset testsuite_subtest_details  fail
 cset testsuite_testproc_details fail
+cset testsuite_testproc_log_calls ignore_skips
 
 # To automatically call cleanup or not when ending the test
 cset testsuite_cleanup_on_failure true
@@ -311,10 +312,18 @@ set _testproc_messages    [dict create]
 set _testproc_skip_next   false
 set _testproc_skip_reason ""
 set _incomplete_reason    ""
+set _subtest_messages     [dict create]
+
 set _subtest_pass_count   0
 set _subtest_skip_count   0
 set _subtest_fail_count   0
-set _subtest_messages     [dict create]
+
+set STATUS_PASS 0
+set STATUS_FAIL 1
+set STATUS_SKIP -1
+
+# Final test status
+set test_status $STATUS_PASS
 
 # Other common variables
 set re_word_str          "\\S+"
@@ -382,7 +391,7 @@ set RETURN_TIMEOUT 110 ; # ETIMEDOUT
 ################################################################
 
 proc fail { message } {
-	global _incomplete_reason
+	global _incomplete_reason STATUS_FAIL
 
 	# Avoid recursive calls from within cleanup
 	if {[info level] > 1 && [lindex [info level -1] 0] eq "cleanup"} {
@@ -394,7 +403,7 @@ proc fail { message } {
 	set _incomplete_reason $message
 
 	# _test_fini will handle cleanup and print the failure message.
-	_test_fini 1
+	_test_fini $STATUS_FAIL
 }
 
 
@@ -418,7 +427,7 @@ proc fail { message } {
 ################################################################
 
 proc skip { message } {
-	global _incomplete_reason
+	global _incomplete_reason STATUS_SKIP
 
 	# Avoid recursive calls from within cleanup
 	if {[info level] > 1 && [lindex [info level -1] 0] eq "cleanup"} {
@@ -430,7 +439,7 @@ proc skip { message } {
 	set _incomplete_reason $message
 
 	# _test_fini will handle cleanup and print the skipped message.
-	_test_fini -1
+	_test_fini $STATUS_SKIP
 }
 
 
@@ -453,6 +462,7 @@ proc skip { message } {
 ################################################################
 
 proc pass { } {
+	global STATUS_PASS
 
 	# Avoid recursive calls from within cleanup
 	if {[info level] > 1 && [lindex [info level -1] 0] eq "cleanup"} {
@@ -461,7 +471,7 @@ proc pass { } {
 	}
 
 	# _test_fini will handle cleanup and print the success message.
-	_test_fini 0
+	_test_fini $STATUS_PASS
 }
 
 
@@ -588,8 +598,14 @@ proc subskip args {
 
 	set description ""
 	set count       1
+	set nolog       0
 	while {[llength $args]} {
 		switch -glob -- [lindex $args 0] {
+			-nolog {
+				set nolog 1
+				# Shift args down one
+				set args [lassign $args -]
+			}
 			-count   {set args [lassign $args - count]}
 			-*       {fail "Unknown option: [lindex $args 0]"}
 			default  break
@@ -609,8 +625,27 @@ proc subskip args {
 		set message [format "Subtest %2d skipped" $subtest_count]
 	}
 	if {$description ne ""} { append message " : $description" }
-	log_warn $message
+	if {$nolog != 1} {
+		log_warn $message
+	}
 	dict set _subtest_messages [expr $subtest_count] [list skip $message]
+}
+
+
+################################################################
+#
+# NAME
+#	get_subtest_fail_count - returns the current subtest failure count
+#
+# SYNOPSIS
+#	get_subtest_fail_count
+#
+################################################################
+
+proc get_subtest_fail_count {} {
+	global _subtest_fail_count
+
+	return $_subtest_fail_count
 }
 
 
@@ -844,6 +879,43 @@ proc check_run_as_user user {
 		return false
 	}
 	if {[run_command_status -none -user $user "$bin_id -un"]} {
+		return false
+	}
+
+	if {[get_admin_level $user] != ""} {
+		log_warn "User $user already exists in DB, but it's probable that it's going to be removed by the test cleanup"
+	}
+
+	return true
+}
+
+
+################################################################
+#
+# NAME
+#	check_user_id - check if user exists in the system
+#
+# SYNOPSIS
+#	check_user_id user
+#
+# DESCRIPTION
+#	This proc also log_warn a message if user already exists in the DB
+#	because most probably this user is testsuite_user and that user is
+#	expected NOT to be in the DB and could potentially be removed from
+#	it by the test.
+#
+# RETURN VALUE
+#	Returns true if the user passed exists in the system, false otherwise.
+#
+################################################################
+
+proc check_user_id user {
+	global bin_id
+
+	if {$user eq ""} {
+		return false
+	}
+	if {[run_command_status -none "$bin_id -un $user"]} {
 		return false
 	}
 
@@ -1174,6 +1246,14 @@ proc run_command_status args {
 # SYNOPSIS
 #	cancel_job job_id_list ?het_job?
 #
+# DESCRIPTION
+#	Cancels one or more jobs. A job_id of 0 will be silently ignored.
+#
+# OPTIONS
+#	-fail
+#		if scancel fails with exit code or timeout, or the job doesn't
+#		end, test will will fail
+#
 # ARGUMENTS
 #	job_id_list
 #		The list of Slurm job ids that we want to cancel
@@ -1181,16 +1261,35 @@ proc run_command_status args {
 #		1 if jobs are hetjobs and we want to confirm each
 #		component has completed
 #
-# DESCRIPTION
-#	Cancels one or more jobs. A job_id of 0 will be silently ignored.
-#
 # RETURN VALUE
 #	RETURN_SUCCESS if jobs are cancelled, or non-zero value otherwise.
 #
 ################################################################
 
-proc cancel_job { job_id_list {het_job 0}} {
+proc cancel_job args {
 	global scancel
+
+	set fatal         false
+	while {[llength $args]} {
+		switch -glob -- [lindex $args 0] {
+			-fail   {set fatal true; set args [lrange $args 1 end]}
+			-*      {fail "Unknown option: [lindex $args 0]"}
+			default break
+		}
+	}
+
+	set argument_count [llength $args]
+	if {$argument_count < 1} {
+		fail "Too few arguments ($argument_count): $args"
+	} elseif {$argument_count > 2} {
+		fail "Too many arguments ($argument_count): $args"
+	}
+	lassign $args job_id_list
+	if {$argument_count == 2} {
+		set het_job [lindex $args 1]
+	} else {
+		set het_job 0
+	}
 
 	set job_list_clean [list]
 	foreach job_id $job_id_list {
@@ -1204,14 +1303,25 @@ proc cancel_job { job_id_list {het_job 0}} {
 	}
 
 	log_debug "Cancelling $job_list_clean"
-	if {[run_command_status "$scancel -Q $job_list_clean"]} {
-		log_warn "scancel command returned error"
-		return $::RETURN_ERROR
+	set result [run_command "$scancel -Q $job_list_clean"]
+	if {[dict get $result exit_code]} {
+		set message "scancel command returned an error ([dict get $result output])"
+		if {$fatal} {
+			fail $message
+		} else {
+			log_warn $message
+			return $::RETURN_ERROR
+		}
 	}
 	foreach job_id $job_list_clean {
 		if {[wait_for_job $job_id "DONE" $het_job]} {
-			log_warn "Job $job_id not ended"
-			return $::RETURN_ERROR
+			set message "Job $job_id did not end when cancelled"
+			if {$fatal} {
+				fail $message
+			} else {
+				log_warn $message
+				return $::RETURN_ERROR
+			}
 		}
 	}
 	return $::RETURN_SUCCESS
@@ -1803,7 +1913,7 @@ proc wait_for_file args {
 		fail $message
 	}
 
-	log_error $message
+	log_warn $message
 	return $::RETURN_TIMEOUT
 }
 
@@ -1835,11 +1945,12 @@ proc wait_for_file args {
 #	desired_state
 #		The state you want the job to attain before
 #		returning.  Currently supports:
-#			DONE any terminated state
-#			PENDING job is pending
-#			RUNNING job is running
+#			CANCELLED - job is cancelled
+#			DONE      - any terminated state (includes cancelled)
+#			PENDING   - job is pending
+#			RUNNING   - job is running
 #			SPECIAL_EXIT
-#			SUSPENDED job is suspended
+#			SUSPENDED - job is suspended
 #
 # RETURN VALUE
 #	RETURN_SUCCESS, or non-zero on error.
@@ -1874,6 +1985,7 @@ proc _wait_for_single_job args {
 
 	# First verify that desired_state is supported
 	switch $desired_state {
+		"CANCELLED" {}
 		"DONE" {}
 		"PENDING" {}
 		"RUNNING" {}
@@ -1908,9 +2020,26 @@ proc _wait_for_single_job args {
 		}
 
 		switch $state {
+			"CANCELLED" {
+				if {$desired_state eq "CANCELLED"} {
+					log_debug "Job $job_id is CANCELLED"
+					sleep 2
+					return $::RETURN_SUCCESS
+				}
+				if {$desired_state eq "DONE"} {
+					log_debug "Job $job_id is DONE ($state)"
+					sleep 2
+					return $::RETURN_SUCCESS
+				}
+				set message "Job $job_id is $state, but we wanted $desired_state"
+				if {$fatal} {
+					fail $message
+				}
+				log_debug $message
+				return $::RETURN_ERROR
+			}
 			"NOT_FOUND" -
 			"BOOT_FAIL" -
-			"CANCELLED" -
 			"COMPLETED" -
 			"DEADLINE" -
 			"FAILED" -
@@ -1918,17 +2047,12 @@ proc _wait_for_single_job args {
 			"OUT_OF_MEMORY" -
 			"PREEMPTED" -
 			"TIMEOUT" {
-				if {[string compare $desired_state "DONE"] == 0} {
+				if {$desired_state eq "DONE"} {
 					log_debug "Job $job_id is DONE ($state)"
 					sleep 2
 					return $::RETURN_SUCCESS
 				}
-				if {[string compare $desired_state "RUNNING"] == 0} {
-					set message "Job $job_id is $state, but we wanted RUNNING"
-				}
-				if {[string compare $desired_state "SUSPENDED"] == 0} {
-					set message "Job $job_id is $state, but we wanted SUSPENDED"
-				}
+				set message "Job $job_id is $state, but we wanted $desired_state"
 				if {$fatal} {
 					fail $message
 				}
@@ -1936,28 +2060,28 @@ proc _wait_for_single_job args {
 				return $::RETURN_ERROR
 			}
 			"PENDING" {
-				if {[string compare $desired_state "PENDING"] == 0} {
+				if {$desired_state eq "PENDING"} {
 					log_debug "Job $job_id is PENDING"
 					return $::RETURN_SUCCESS
 				}
 				log_debug "Job $job_id is in state $state, desire $desired_state"
 			}
 			"RUNNING" {
-				if {[string compare $desired_state "RUNNING"] == 0} {
+				if {$desired_state eq "RUNNING"} {
 					log_debug "Job $job_id is RUNNING"
 					return $::RETURN_SUCCESS
 				}
 				log_debug "Job $job_id is in state $state, desire $desired_state"
 			}
 			"SPECIAL_EXIT" {
-				if {[string compare $desired_state "SPECIAL_EXIT"] == 0} {
+				if {$desired_state eq "SPECIAL_EXIT"} {
 					log_debug "Job $job_id is SPECIAL_EXIT"
 					return $::RETURN_SUCCESS
 				}
 				log_debug "Job $job_id is in state $state, desire $desired_state"
 			}
 			"SUSPENDED" {
-				if {[string compare $desired_state "SUSPENDED"] == 0} {
+				if {$desired_state eq "SUSPENDED"} {
 					log_debug "Job $job_id is SUSPENDED"
 					return $::RETURN_SUCCESS
 				}
@@ -2010,11 +2134,12 @@ proc _wait_for_single_job args {
 #	desired_state
 #		The state you want the job to attain before returning.
 #		Currently supports:
-#			DONE any terminated state
-#			PENDING job is pending
-#			RUNNING job is running
+#			CANCELLED - job is cancelled
+#			DONE      - any terminated state (including cancelled)
+#			PENDING   - job is pending
+#			RUNNING   - job is running
 #			SPECIAL_EXIT
-#			SUSPENDED job is suspended
+#			SUSPENDED - job is suspended
 #	het_job
 #		If set, checks the state of each component job if the job
 #		is a het one.
@@ -2954,46 +3079,6 @@ proc check_bb_persistent { } {
 ################################################################
 #
 # NAME
-#	get_bb_types - gets the burst buffer plugins running with task/ stripped
-#
-# SYNOPSIS
-#	get_bb_types
-#
-# RETURN VALUE
-#	Returns comma separated list of task plugins running without the task/
-#
-################################################################
-
-proc get_bb_types { } {
-	global scontrol re_word_str
-
-	log_user 0
-	set bb_types ""
-	spawn $scontrol show config
-	expect {
-		-re "BurstBufferType *= ($re_word_str)" {
-			set parts [split $expect_out(1,string) ",/"]
-			while 1 {
-				set task_found [lsearch $parts "burst_buffer"]
-				if { $task_found == -1 } break
-				set parts [lreplace $parts $task_found $task_found]
-			}
-			set bb_types [join $parts ","]
-			exp_continue
-		}
-		eof {
-			wait
-		}
-	}
-
-	log_user 1
-	return $bb_types
-}
-
-
-################################################################
-#
-# NAME
 #	get_default_acct - gets user's default account
 #
 # SYNOPSIS
@@ -3084,7 +3169,7 @@ proc get_select_type_params { {partition ""} } {
 		set partition [default_partition]
 	}
 
-	if {[string compare $partition ""]} {
+	if {$partition ne ""} {
 		spawn -noecho $bin_bash -c "exec $scontrol show part $partition | $bin_grep SelectTypeParameters"
 		expect {
 			-re "SelectTypeParameters *= *NONE" {
@@ -3099,7 +3184,7 @@ proc get_select_type_params { {partition ""} } {
 			}
 		}
 	}
-	if { [string compare params ""] } {
+	if {$params eq ""} {
 		spawn -noecho $bin_bash -c "exec $scontrol show config | $bin_grep SelectTypeParameters"
 		expect {
 			-re "SelectTypeParameters *= *($re_word_str)" {
@@ -3169,13 +3254,13 @@ proc check_config_select { type } {
 ################################################################
 #
 # NAME
-#	get_total_cpus - gets the total amount of CPUs on the default partition
+#	get_total_cpus - gets the total available CPUs on the default partition
 #
 # SYNOPSIS
 #	get_total_cpus
 #
 # RETURN VALUE
-#	The total amount of CPUs on the default partition.
+#	The total available CPUs on the default partition.
 #
 # NOTE
 #	CoreSpecCount are not part of the total.
@@ -3183,34 +3268,30 @@ proc check_config_select { type } {
 ################################################################
 
 proc get_total_cpus {} {
-	global sinfo scontrol re_word_str
 
-	set partition [default_partition]
-	set cpu_cnt 0
-	set nodes_matched [list]
+	set total_cpu_count 0
 
-	set re_with_cs    "NodeName=($re_word_str).*CPUTot=(\\d+).*CoreSpecCount=(\\d+).*ThreadsPerCore=(\\d+)"
-	set re_without_cs "NodeName=($re_word_str).*CPUTot=(\\d+)"
+	# Obtain the list of available nodes in the default partition
+	set node_list [get_nodes_by_state]
 
-	set out [run_command_output -fail "$sinfo -h -o \"%P %N\" -p $partition --state=idle"]
-	if {[regexp "$partition\\* ($re_word_str)" $out - def_hostlist] != 1} {
-		fail "Not able to get the hostlist from sinfo"
-	}
+	# Tally the cpus on these nodes
+	set nodes_dict [get_nodes]
+	foreach node_name $node_list {
+		set node_dict [dict get $nodes_dict $node_name]
+		set node_cpu_count [dict get $node_dict "CPUTot"]
 
-	set out [run_command_output "$scontrol --oneliner show node $def_hostlist"]
-	foreach {re node_name tmp_cpu_cnt core_spec_cnt threads_per_core} [regexp -all -inline -linestop $re_with_cs $out] {
-		set cpu_cnt [expr $cpu_cnt + $tmp_cpu_cnt - $core_spec_cnt * $threads_per_core]
-		lappend nodes_matched $node_name
-	}
-	foreach {re node_name tmp_cpu_cnt} [regexp -all -inline -linestop $re_without_cs $out] {
-		# Not count nodes already counted
-		if {[lsearch $nodes_matched $node_name] == -1} {
-			set cpu_cnt [expr $cpu_cnt + $tmp_cpu_cnt]
+		# Subtract out any spec cores
+		if {[dict exists $node_dict "CoreSpecCount"] && [dict exists $node_dict "ThreadsPerCore"]} {
+			set spec_cpu_count [expr [dict get $node_dict "CPUTot"] * [dict get $node_dict "ThreadsPerCore"]]
+			incr node_cpu_count -$spec_cpu_count
 		}
+
+		incr total_cpu_count $node_cpu_count
 	}
 
-	return $cpu_cnt
+	return $total_cpu_count
 }
+
 
 ################################################################
 #
@@ -3273,7 +3354,7 @@ proc is_super_user {{user ""}} {
 	}
 
 	# Check if user is root
-	if {[string compare $user "root"] == 0} {
+	if {$user eq "root"} {
 		return true
 	}
 
@@ -3405,7 +3486,7 @@ proc partition_oversubscribe { {partition ""} } {
 #	Use scontrol to determine the name of the default partition
 #
 # RETURN VALUE
-#	Name of the current default partition
+#	Name of the current default partition, or fail if not found.
 #
 ################################################################
 
@@ -3423,7 +3504,7 @@ proc default_partition {} {
 	catch {close $fd}
 
 	if {[string length $name] == 0} {
-		log_error "Could not identify the default partition"
+		fail "Could not identify the default partition"
 	}
 
 	return $name
@@ -3450,7 +3531,7 @@ proc default_partition {} {
 proc default_part_exclusive {} {
 	set def_part [default_partition]
 	set oversubscribe [partition_oversubscribe $def_part]
-	if {[string compare $oversubscribe "EXCLUSIVE"] == 0} {
+	if {$oversubscribe eq "EXCLUSIVE"} {
 		return 1
 	} else {
 		return 0
@@ -3493,7 +3574,7 @@ proc make_bash_script { script_name script_contents } {
 	puts $fd "#!$bin_bash"
 	puts $fd $script_contents
 	close $fd
-	exec $bin_chmod 700 $script_name
+	exec $bin_chmod 777 $script_name
 }
 
 
@@ -3821,13 +3902,13 @@ proc change_subbp_state { node ionodes state } {
 
 proc scale_to_megs { value factor } {
 
-	if {[string compare $factor "T"] == 0} {
+	if {$factor == "T"} {
 		set value [expr $value * 1024 * 1024]
-	} elseif {[string compare $factor "G"] == 0} {
+	} elseif {$factor == "G"} {
 		set value [expr $value * 1024]
-	} elseif {[string compare $factor "M"] == 0} {
+	} elseif {$factor == "M"} {
 		set value [expr $value * 1]
-	} elseif {[string compare $factor "K"] == 0} {
+	} elseif {$factor == "K"} {
 		set value [expr $value / 1024]
 		set value [expr {round($value)}]
 	} else {
@@ -3857,11 +3938,11 @@ proc scale_to_megs { value factor } {
 
 proc scale_to_ks { value factor } {
 
-	if {[string compare $factor "G"] == 0} {
+	if {$factor == "G"} {
 		set value [expr $value * 1024 * 1024]
-	} elseif {[string compare $factor "M"] == 0} {
+	} elseif {$factor == "M"} {
 		set value [expr $value * 1024]
-	} elseif {[string compare $factor "K"] == 0} {
+	} elseif {$factor == "K"} {
 		set value [expr $value * 1]
 	} else {
 		set value [expr $value / 1024]
@@ -4126,13 +4207,15 @@ proc range_to_list {range_expression} {
 #	get_nodes_by_state partition states
 #
 # DESCRIPTION
-#	Get the list of node names in a given partition/states
+#	sinfo is used to list node names and states in the specified partition.
+#	This list of nodes is filtered to return only the nodes matching one of
+#	the requested states.
 #
 # ARGUMENTS
 #	partition
 #		partition to get nodes off
 #	states
-#		states to filter on nodes
+#		comma-separated list of allowed states
 #
 # RETURN VALUE
 #	node names list, -1 on sinfo error
@@ -4140,35 +4223,29 @@ proc range_to_list {range_expression} {
 #####################################################################
 
 proc get_nodes_by_state {{states ""} {partition ""}} {
+	global sinfo
 
-	global sinfo re_word_str
-	log_user 0
-	set node_list ""
+	set node_list [list]
 
-	if {[string length $partition] == 0} {
+	if {$partition eq ""} {
 		set partition [default_partition]
 	}
 
-	if {[string length $states] == 0} {
-		set states "Idle"
+	if {$states eq ""} {
+		set states "idle"
 	}
 
-	set sinfo_pid [spawn -noecho $sinfo -h -N -p $partition -o %N -t $states -e]
-	expect {
-		-re "($re_word_str)" {
-			lappend node_list $expect_out(1,string)
-			exp_continue
-		}
-		timeout {
-			slow_kill $sinfo_pid
-			fail "sinfo not responding"
-		}
-		eof {
-			wait
+	set output [run_command_output -fail "$sinfo -h -N -p $partition -o '%N|%t' -e"]
+	foreach line [split $output "\n"] {
+		if {$line eq ""} { continue }
+		lassign [split $line |] node_name node_state
+		foreach requested_state [split $states ,] {
+			if {$node_state eq $requested_state} {
+				lappend node_list $node_name
+			}
 		}
 	}
 
-	log_user 1
 	return $node_list
 }
 
@@ -6039,6 +6116,7 @@ proc get_nodes_by_request args {
 		fail "[lindex [info level 0] 0]: Invalid number of arguments ([llength $args]): $args"
 	}
 
+	log_debug "Getting nodes that can be allocated with request: $request_args"
 	set command "$srun -Q $request_args printenv SLURMD_NODENAME"
 	set result [run_command {*}$options $command]
 
@@ -6467,35 +6545,37 @@ proc subtest args {
 ################################################################
 #
 # NAME
-#	_is_testproc_included - returns if testproc_num was included or not excluded in argv
+#	_is_testproc_included - returns if testproc_id was included or not excluded in argv
 #
 # SYNOPSIS
-#	_is_testproc_included testproc_num
+#	_is_testproc_included testproc_id testproc_alias
 #
 # DESCRIPTION
 #	From command line the test runner can use -i and -e to include or
 #	exclude some test functions by their number. This function must be
 #	used to check if the test runner included or excluded the given
-#	testproc_num.
+#	testproc_id.
 #
 # RETURN VALUE
-#	true is testproc_num was included with -i or not excluded -e,
-#	false otherwise
+#	true is testproc_id or testproc_alias was included with -i or not
+#	excluded -e, false otherwise
 #
 ################################################################
 
-proc _is_testproc_included {testproc_num} {
+proc _is_testproc_included {testproc_id testproc_alias} {
 	global _testproc_included _testproc_excluded
 
 	if {[llength $_testproc_included]} {
-		if {[lsearch $_testproc_included $testproc_num] >= 0} {
+		if {[lsearch $_testproc_included $testproc_id] >= 0 || \
+		    [lsearch $_testproc_included $testproc_alias] >= 0} {
 			return true
 		}
 		return false
 	}
 
 	if {[llength $_testproc_excluded]} {
-		if {[lsearch $_testproc_excluded $testproc_num] >= 0} {
+		if {[lsearch $_testproc_excluded $testproc_id] >= 0 || \
+		    [lsearch $_testproc_excluded $testproc_alias] >= 0} {
 			return false
 		}
 	}
@@ -6593,12 +6673,35 @@ proc run_following_testprocs {} {
 ################################################################
 
 proc testproc args {
+	return [testproc_alias "" {*}$args]
+}
+
+
+################################################################
+#
+# NAME
+#	testproc_alias - launcher to run or skip a testproc_call, with an alias
+#
+# SYNOPSIS
+#	testproc alias testproc_call
+#
+# DESCRIPTION
+#	See testproc
+#
+################################################################
+
+proc testproc_alias {alias args} {
 	global _testproc_pass_list _testproc_skip_list _testproc_fail_list
 	global _testproc_skip_next _testproc_skip_reason
-	global _testproc_messages
+	global _testproc_messages testsuite_testproc_log_calls
 	global _subtest_pass_count
 	global _subtest_skip_count
 	global _subtest_fail_count
+
+	# Avoid integer alias to avoid confusions with testproc_id
+	if {[llength $alias] && [string is entier $alias]} {
+		fail "testproc_alias doesn't support integer alias, use alphanumeric"
+	}
 
 	# Save previous subtest counts and next subtest num
 	set prev_pass $_subtest_pass_count
@@ -6609,22 +6712,34 @@ proc testproc args {
 	                       $_subtest_fail_count + 1]
 
 	# Get the testproc number
-	set testproc_num [expr [llength $_testproc_pass_list] + \
-	                       [llength $_testproc_skip_list] + \
-	                       [llength $_testproc_fail_list] + 1]
+	set testproc_id [expr [llength $_testproc_pass_list] + \
+	                      [llength $_testproc_skip_list] + \
+	                      [llength $_testproc_fail_list] + 1]
 
 	# Run or skip the testproc
 	set rc $::RETURN_SUCCESS
 	set reason ""
-	if {![_is_testproc_included $testproc_num]} {
+	if {![_is_testproc_included $testproc_id $alias]} {
 		set reason "(Excluded from command line)"
-		subskip "Skipping testproc $testproc_num: {$args} $reason"
+		if {$testsuite_testproc_log_calls == yes} {
+			subskip -nolog "Skipping testproc $testproc_id: {$args} $reason"
+		} else {
+			subskip -nolog "Skipping testproc $testproc_id: $reason"
+		}
 	} else {
 		if {$_testproc_skip_next} {
 			set reason "($_testproc_skip_reason)"
-			subskip  "Skipping testproc $testproc_num: {$args} $reason"
+			if {$testsuite_testproc_log_calls == yes} {
+				subskip  "Skipping testproc $testproc_id: {$args} $reason"
+			} else {
+				subskip  "Skipping testproc $testproc_id: $reason"
+			}
 		} else {
-			log_info "Running testproc $testproc_num: $args"
+			if {$testsuite_testproc_log_calls != no} {
+				log_info "Running testproc $testproc_id: $args"
+			} else {
+				log_info "Running testproc $testproc_id"
+			}
 			set rc [{*}$args]
 		}
 	}
@@ -6635,16 +6750,32 @@ proc testproc args {
 	                       $_subtest_fail_count]
 
 	# Register the testproc as fail, skip or pass (based on subtests)
+	if {[llength $alias]} {
+		set alias "${alias}: "
+	}
 	if {$_subtest_fail_count > $prev_fail} {
 		set reason "(Subtests: $prev_subtest to $curr_subtest)"
-		lappend  _testproc_fail_list $testproc_num
-		dict set _testproc_messages  $testproc_num [list failed "{$args} $reason"]
+		lappend  _testproc_fail_list $testproc_id
+		if {$testsuite_testproc_log_calls != no} {
+			dict set _testproc_messages  $testproc_id [list failed "$alias{$args} $reason"]
+		} else {
+			dict set _testproc_messages  $testproc_id [list failed "$alias$reason"]
+		}
 	} elseif {$_subtest_skip_count > $prev_skip} {
-		lappend  _testproc_skip_list $testproc_num
-		dict set _testproc_messages  $testproc_num [list skipped "{$args} $reason"]
+		lappend  _testproc_skip_list $testproc_id
+		if {$testsuite_testproc_log_calls == yes} {
+			dict set _testproc_messages  $testproc_id [list skipped "$alias{$args} $reason"]
+		} else {
+			dict set _testproc_messages  $testproc_id [list skipped "$alias$reason"]
+		}
 	} else {
-		lappend  _testproc_pass_list $testproc_num
-		dict set _testproc_messages  $testproc_num [list passed "{$args}"]
+		set reason "(Subtests: $prev_subtest to $curr_subtest)"
+		lappend  _testproc_pass_list $testproc_id
+		if {$testsuite_testproc_log_calls == yes} {
+			dict set _testproc_messages  $testproc_id [list passed "$alias{$args} $reason"]
+		} else {
+			dict set _testproc_messages  $testproc_id [list passed "$alias$reason"]
+		}
 	}
 
 	return $rc
@@ -7024,7 +7155,7 @@ proc _test_cleanup {} {
 
 proc _test_init {} {
 	global test_dir test_id test_name testsuite_shared_dir
-	global _testproc_included _testproc_excluded argv
+	global _testproc_included _testproc_excluded argv bin_chmod
 
 	# parse argv to get and remove _testproc_included and _testproc_excluded params
 	set idx [expr {[info exists argv] ? [lsearch $argv -i] : -1}]
@@ -7057,6 +7188,7 @@ proc _test_init {} {
 
 	# Create temporary shared test directory
 	exec mkdir -p $test_dir
+	exec $bin_chmod a+rwx $test_dir
 }
 
 
@@ -7085,6 +7217,7 @@ proc _test_init {} {
 proc _test_fini { status } {
 	global testsuite_cleanup_on_failure _test_fini_called
 	global _subtest_fail_count _subtest_skip_count
+	global STATUS_FAIL STATUS_PASS STATUS_SKIP
 
 	# Avoid potential infinite recursive calls.
 	# _test_fini should be called only once, but custom cleanup procs
@@ -7097,19 +7230,22 @@ proc _test_fini { status } {
 
 
 	# Determine if test completed or was aborted
-	set completed [expr $status == 0 ? true : false]
+	set completed [expr $status == $STATUS_PASS ? true : false]
 
 	# Override status with subtest status if available and necessary
-	if {$status < 1} {
+	if {$status != $STATUS_FAIL} {
 		if {$_subtest_fail_count > 0} {
-			set status 1
+			set status $STATUS_FAIL
 		} elseif {$_subtest_skip_count > 0} {
-			set status -1
+			set status $STATUS_SKIP
 		}
 	}
 
+	# Set final test status global variable so it can be used in cleanup
+	set test_status $status
+
 	# Only cleanup if test not failed or configured to do so
-	if {$status != 1 || $testsuite_cleanup_on_failure} {
+	if {$status != $STATUS_FAIL || $testsuite_cleanup_on_failure} {
 		_test_cleanup
 	}
 	_print_summary $status $completed

@@ -1,4 +1,4 @@
-.TH scancel "1" "Slurm Commands" "May 2021" "Slurm Commands"
+.TH scancel "1" "Slurm Commands" "October 2021" "Slurm Commands"
 
 .SH "NAME"
 scancel \- Used to signal jobs or job steps that are under the control of Slurm.
@@ -15,11 +15,11 @@ If the job ID of a job array is specified with an array ID value then only that
 job array element will be cancelled.
 If the job ID of a job array is specified without an array ID value then all
 job array elements will be cancelled.
-While a heterogeneous job is in pending state, only the entire job can be
+While a heterogeneous job is in a PENDING state, only the entire job can be
 cancelled rather than its individual components.
-A request to cancel an individual component of a heterogeneous job not in
-pending state will return an error.
-After the job has begun execution, the individual component can be cancelled.
+A request to cancel an individual component of a heterogeneous job while in
+a PENDING state will return an error.
+After the job has begun execution, an individual component can be cancelled.
 A job or job step can only be signaled by the owner of that job or user root.
 If an attempt is made by an unauthorized user to signal a job or job step, an
 error message will be printed and the job will not be signaled.
@@ -47,6 +47,11 @@ NOTE: The shell itself may exit upon receipt of many signals.
 You may avoid this by explicitly trap signals within the shell
 script (e.g. "trap <arg> <signals>"). See the shell documentation
 for details.
+
+.TP
+\fB\-M\fR, \fB\-\-clusters\fR=<\fIstring\fR>
+Cluster to issue commands to. Implies \fB\-\-ctld\fR.
+Note that the SlurmDBD must be up for this option to work properly.
 
 .TP
 \fB\-\-ctld\fR
@@ -80,13 +85,19 @@ Do not stage out any burst buffer data.
 Interactive mode. Confirm each job_id.step_id before performing the cancel operation.
 
 .TP
-\fB\-M\fR, \fB\-\-clusters\fR=<\fIstring\fR>
-Cluster to issue commands to. Implies \fB\-\-ctld\fR.
-Note that the SlurmDBD must be up for this option to work properly.
-
-.TP
 \fB\-n\fR, \fB\-\-jobname\fR=\fIjob_name\fR, \fB\-\-name\fR=\fIjob_name\fR
 Restrict the scancel operation to jobs with this job name.
+
+.TP
+\fB\-\-me\fR
+Restrict the scancel operation to jobs owned by the current user.
+
+.TP
+\fB\-w\fR, \fB\-\-nodelist=\fIhost1,host2,...\fR
+Cancel any jobs using any of the given hosts.  The list may be specified as
+a comma\-separated list of hosts, a range of hosts (host[1\-5,7,...] for
+example), or a filename. The host list will be assumed to be a filename only
+if it contains a "/" character.
 
 .TP
 \fB\-p\fR, \fB\-\-partition\fR=\fIpartition_name\fR
@@ -126,12 +137,12 @@ state. \fIjob_state_name\fR may have a value of either "PENDING",
 "RUNNING" or "SUSPENDED".
 
 .TP
-\fB\-u\fR, \fB\-\-user\fR=\fIuser_name\fR
-Restrict the scancel operation to jobs owned by this user.
-
-.TP
 \fB\-\-usage\fR
 Print a brief help message listing the \fBscancel\fR options.
+
+.TP
+\fB\-u\fR, \fB\-\-user\fR=\fIuser_name\fR
+Restrict the scancel operation to jobs owned by the given user.
 
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
@@ -141,13 +152,6 @@ This option is incompatible with the \fB\-\-quiet\fR option.
 .TP
 \fB\-V\fR, \fB\-\-version\fR
 Print the version number of the scancel command.
-
-.TP
-\fB\-w\fR, \fB\-\-nodelist=\fIhost1,host2,...\fR
-Cancel any jobs using any of the given hosts.  The list may be specified as
-a comma\-separated list of hosts, a range of hosts (host[1\-5,7,...] for
-example), or a filename. The host list will be assumed to be a filename only
-if it contains a "/" character.
 
 .TP
 \fB\-\-wckey\fR=\fIwckey\fR
@@ -314,10 +318,10 @@ $ scancel 1237_4
 .fi
 
 .SH "COPYING"
-Copyright (C) 2002-2007 The Regents of the University of California.
+Copyright (C) 2002\-2007 The Regents of the University of California.
 Produced at Lawrence Livermore National Laboratory (cf, DISCLAIMER).
 .br
-Copyright (C) 2008-2011 Lawrence Livermore National Security.
+Copyright (C) 2008\-2011 Lawrence Livermore National Security.
 .br
 Copyright (C) 2010\-2021 SchedMD LLC.
 .LP

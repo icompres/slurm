@@ -468,7 +468,7 @@ AC_CONFIG_FILES([Makefile
 		 src/plugins/acct_gather_energy/none/Makefile
 		 src/plugins/acct_gather_energy/pm_counters/Makefile
 		 src/plugins/acct_gather_energy/rapl/Makefile
-		 src/plugins/acct_gather_energy/rsmi/Makefile
+		 src/plugins/acct_gather_energy/gpu/Makefile
 		 src/plugins/acct_gather_energy/xcc/Makefile
 		 src/plugins/acct_gather_interconnect/Makefile
 		 src/plugins/acct_gather_interconnect/ofed/Makefile
@@ -508,6 +508,7 @@ AC_CONFIG_FILES([Makefile
 		 src/plugins/ext_sensors/rrd/Makefile
 		 src/plugins/ext_sensors/none/Makefile
 		 src/plugins/gpu/Makefile
+		 src/plugins/gpu/common/Makefile
 		 src/plugins/gpu/generic/Makefile
 		 src/plugins/gpu/nvml/Makefile
 		 src/plugins/gpu/rsmi/Makefile
@@ -556,8 +557,10 @@ AC_CONFIG_FILES([Makefile
 		 src/plugins/openapi/Makefile
 		 src/plugins/openapi/v0.0.36/Makefile
 		 src/plugins/openapi/v0.0.37/Makefile
+		 src/plugins/openapi/v0.0.38/Makefile
 		 src/plugins/openapi/dbv0.0.36/Makefile
 		 src/plugins/openapi/dbv0.0.37/Makefile
+		 src/plugins/openapi/dbv0.0.38/Makefile
 		 src/plugins/power/Makefile
 		 src/plugins/power/common/Makefile
 		 src/plugins/power/cray_aries/Makefile

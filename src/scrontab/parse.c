@@ -106,6 +106,9 @@ static int _handle_step(bitstr_t *b, int start, char **pos)
 
 extern cron_entry_t *cronspec_to_bitstring(char *pos)
 {
+	/* save initial string position for later */
+	char *pos_init = pos;
+
 	cron_entry_t *entry = new_cron_entry();
 
 	if (*pos == '@') {
@@ -119,6 +122,10 @@ extern cron_entry_t *cronspec_to_bitstring(char *pos)
 			bit_set(entry->month, 1);
 			bit_set_all(entry->day_of_week);
 			entry->flags |= CRON_WILD_DOW;
+			if (!strncasecmp(pos, "yearly", 6))
+				pos += 6;
+			else
+				pos += 8;
 		} else if (!strncasecmp(pos, "monthly", 7)) {
 			/* "0 0 1 * *" */
 			bit_set(entry->minute, 0);
@@ -128,6 +135,7 @@ extern cron_entry_t *cronspec_to_bitstring(char *pos)
 			entry->flags |= CRON_WILD_MONTH;
 			bit_set_all(entry->day_of_week);
 			entry->flags |= CRON_WILD_DOW;
+			pos += 7;
 		} else if (!strncasecmp(pos, "weekly", 6)) {
 			/* "0 0 * * 0" */
 			bit_set(entry->minute, 0);
@@ -137,6 +145,7 @@ extern cron_entry_t *cronspec_to_bitstring(char *pos)
 			bit_set_all(entry->month);
 			entry->flags |= CRON_WILD_MONTH;
 			bit_set(entry->day_of_week, 0);
+			pos += 6;
 		} else if (!strncasecmp(pos, "daily", 5) ||
 			   !strncasecmp(pos, "midnight", 8)) {
 			/* "0 0 * * *" */
@@ -148,6 +157,10 @@ extern cron_entry_t *cronspec_to_bitstring(char *pos)
 			entry->flags |= CRON_WILD_MONTH;
 			bit_set_all(entry->day_of_week);
 			entry->flags |= CRON_WILD_DOW;
+			if (!strncasecmp(pos, "daily", 5))
+				pos += 5;
+			else
+				pos += 8;
 		} else if (!strncasecmp(pos, "hourly", 6)) {
 			/* "0 * * * *" */
 			bit_set(entry->minute, 0);
@@ -158,12 +171,11 @@ extern cron_entry_t *cronspec_to_bitstring(char *pos)
 			entry->flags |= CRON_WILD_MONTH;
 			bit_set_all(entry->day_of_week);
 			entry->flags |= CRON_WILD_DOW;
+			pos += 6;
 		} else {
 			error("invalid @ line");
 			goto fail;
 		}
-		while (isalpha((int) *pos))
-			pos++;
 		goto command;
 	}
 
@@ -330,6 +342,8 @@ extern cron_entry_t *cronspec_to_bitstring(char *pos)
 	bit_clear(entry->day_of_week, 7);
 
 command:
+	/* set initial cronspec */
+	entry->cronspec = xstrndup(pos_init, pos - pos_init);
 	if (*pos != ' ' && *pos != '\t')
 		goto fail;
 	while (*pos == ' ' || *pos == '\t')

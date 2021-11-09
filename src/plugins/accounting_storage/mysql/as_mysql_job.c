@@ -293,9 +293,10 @@ extern int as_mysql_job_start(mysql_conn_t *mysql_conn, job_record_t *job_ptr)
 	uint32_t job_state;
 	uint32_t array_task_id =
 		(job_ptr->array_job_id) ? job_ptr->array_task_id : NO_VAL;
+	uint32_t het_job_offset =
+		(job_ptr->het_job_id) ? job_ptr->het_job_offset : NO_VAL;
 	uint64_t job_db_inx = job_ptr->db_index;
 	job_array_struct_t *array_recs = job_ptr->array_recs;
-	char *tres_alloc_str = NULL;
 
 	if ((!job_ptr->details || !job_ptr->details->submit_time)
 	    && !job_ptr->resize_time) {
@@ -329,28 +330,22 @@ extern int as_mysql_job_start(mysql_conn_t *mysql_conn, job_record_t *job_ptr)
 	if (job_ptr->state_reason == WAIT_ARRAY_TASK_LIMIT)
 		begin_time = INFINITE;
 
-	/* Since we need a new db_inx make sure the old db_inx
-	 * removed. This is most likely the only time we are going to
-	 * be notified of the change also so make the state without
-	 * the resize. */
+	/*
+	 * Strip the RESIZING flag and end the job if there was a db_index.  In
+	 * 21.08 we reset the db_index on the slurmctld side, previously it was
+	 * done here.
+	 */
 	if (IS_JOB_RESIZING(job_ptr)) {
-		/* If we have a db_index lets end the previous record. */
-		if (!job_ptr->db_index) {
-			error("We don't have a db_index for job %u, "
-			      "this should only happen when resizing "
-			      "jobs and the database interface was down.",
-			      job_ptr->job_id);
-			job_ptr->db_index = _get_db_index(mysql_conn,
-							  job_ptr->details->
-							  submit_time,
-							  job_ptr->job_id);
+		/*
+		 * If we have a db_index lets end the previous record.
+		 * This should only need to be around 2 versions after 21.08.
+		 */
+		if (job_ptr->db_index) {
+			as_mysql_job_complete(mysql_conn, job_ptr);
+			job_ptr->db_index = 0;
 		}
 
-		if (job_ptr->db_index)
-			as_mysql_job_complete(mysql_conn, job_ptr);
-
 		job_state &= (~JOB_RESIZING);
-		job_ptr->db_index = 0;
 	}
 
 	job_state &= JOB_STATE_BASE;
@@ -498,7 +493,7 @@ no_rollup_change:
 		else
 			xstrcat(query, ", array_task_str, array_task_pending");
 
-		if (job_ptr->tres_alloc_str || tres_alloc_str)
+		if (job_ptr->tres_alloc_str)
 			xstrcat(query, ", tres_alloc");
 		if (job_ptr->tres_req_str)
 			xstrcat(query, ", tres_req");
@@ -522,7 +517,7 @@ no_rollup_change:
 			   "'%s', %u, %u, %u, %u, %u, %"PRIu64", %u, %u",
 			   job_ptr->job_id,
 			   job_ptr->array_job_id, array_task_id,
-			   job_ptr->het_job_id, job_ptr->het_job_offset,
+			   job_ptr->het_job_id, het_job_offset,
 			   job_ptr->assoc_id, job_ptr->qos_id,
 			   job_ptr->user_id, job_ptr->group_id, nodes,
 			   job_ptr->resv_id, job_ptr->time_limit,
@@ -554,9 +549,7 @@ no_rollup_change:
 		else
 			xstrcat(query, ", NULL, 0");
 
-		if (tres_alloc_str)
-			xstrfmtcat(query, ", '%s'", tres_alloc_str);
-		else if (job_ptr->tres_alloc_str)
+		if (job_ptr->tres_alloc_str)
 			xstrfmtcat(query, ", '%s'", job_ptr->tres_alloc_str);
 		if (job_ptr->tres_req_str)
 			xstrfmtcat(query, ", '%s'", job_ptr->tres_req_str);
@@ -601,7 +594,7 @@ no_rollup_change:
 			   job_ptr->total_nodes,
 			   job_ptr->details->pn_min_memory,
 			   job_ptr->array_job_id, array_task_id,
-			   job_ptr->het_job_id, job_ptr->het_job_offset,
+			   job_ptr->het_job_id, het_job_offset,
 			   job_ptr->db_flags,
 			   job_ptr->state_reason_prev_db);
 
@@ -628,9 +621,7 @@ no_rollup_change:
 			xstrfmtcat(query, ", array_task_str=NULL, "
 				   "array_task_pending=0");
 
-		if (tres_alloc_str)
-			xstrfmtcat(query, ", tres_alloc='%s'", tres_alloc_str);
-		else if (job_ptr->tres_alloc_str)
+		if (job_ptr->tres_alloc_str)
 			xstrfmtcat(query, ", tres_alloc='%s'",
 				   job_ptr->tres_alloc_str);
 		if (job_ptr->tres_req_str)
@@ -701,9 +692,7 @@ no_rollup_change:
 			xstrfmtcat(query, "array_task_str=NULL, "
 				   "array_task_pending=0, ");
 
-		if (tres_alloc_str)
-			xstrfmtcat(query, "tres_alloc='%s', ", tres_alloc_str);
-		else if (job_ptr->tres_alloc_str)
+		if (job_ptr->tres_alloc_str)
 			xstrfmtcat(query, "tres_alloc='%s', ",
 				   job_ptr->tres_alloc_str);
 		if (job_ptr->tres_req_str)
@@ -747,7 +736,7 @@ no_rollup_change:
 			   job_ptr->resv_id, job_ptr->time_limit,
 			   job_ptr->details->pn_min_memory,
 			   job_ptr->array_job_id, array_task_id,
-			   job_ptr->het_job_id, job_ptr->het_job_offset,
+			   job_ptr->het_job_id, het_job_offset,
 			   job_ptr->db_flags, job_ptr->state_reason_prev_db,
 			   begin_time, job_ptr->db_index);
 
@@ -762,7 +751,6 @@ no_rollup_change:
 			as_mysql_suspend(mysql_conn, job_db_inx, job_ptr);
 	}
 
-	xfree(tres_alloc_str);
 	xfree(query);
 
 	return rc;
@@ -1016,7 +1004,6 @@ extern int as_mysql_job_complete(mysql_conn_t *mysql_conn,
 	int rc = SLURM_SUCCESS, job_state;
 	time_t submit_time, end_time;
 	uint32_t exit_code = 0;
-	char *tres_alloc_str = NULL;
 
 	if (!job_ptr->db_index
 	    && ((!job_ptr->details || !job_ptr->details->submit_time)
@@ -1124,9 +1111,7 @@ extern int as_mysql_job_complete(mysql_conn_t *mysql_conn,
 	if (job_ptr->derived_ec != NO_VAL)
 		xstrfmtcat(query, ", derived_ec=%u", job_ptr->derived_ec);
 
-	if (tres_alloc_str)
-		xstrfmtcat(query, ", tres_alloc='%s'", tres_alloc_str);
-	else if (job_ptr->tres_alloc_str)
+	if (job_ptr->tres_alloc_str)
 		xstrfmtcat(query, ", tres_alloc='%s'", job_ptr->tres_alloc_str);
 
 	if (job_ptr->comment)
@@ -1157,7 +1142,6 @@ extern int as_mysql_job_complete(mysql_conn_t *mysql_conn,
 	rc = mysql_db_query(mysql_conn, query);
 	xfree(query);
 
-	xfree(tres_alloc_str);
 	return rc;
 }
 

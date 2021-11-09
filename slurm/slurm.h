@@ -624,7 +624,10 @@ enum job_acct_types {
 #define PARTITION_ENFORCE_ANY  2 /* job limit must be valid for ANY
 				  * partition */
 
-/* Auth plugin (id) used for communication */
+/*
+ * Auth plugin (id) used for communication.
+ * Update auth_plugin_types in slurm_auth.c if changed.
+ */
 enum auth_plugin_type {
 	AUTH_PLUGIN_NONE	= 100,
 	AUTH_PLUGIN_MUNGE	= 101,
@@ -827,7 +830,6 @@ typedef enum cpu_bind_type {	/* cpu binding type from --cpu-bind=... */
 	CPU_BIND_TO_CORES   = 0x0004, /* =cores */
 	CPU_BIND_TO_SOCKETS = 0x0008, /* =sockets */
 	CPU_BIND_TO_LDOMS   = 0x0010, /* locality domains */
-	CPU_BIND_TO_BOARDS  = 0x1000, /* =boards */
 	/* the following manual binding flags are mutually exclusive */
 	/* CPU_BIND_NONE needs to be the lowest value among manual bindings */
 	CPU_BIND_NONE	    = 0x0020, /* =no */
@@ -1585,6 +1587,8 @@ typedef struct job_descriptor {	/* For submit, allocate, and update requests */
 				   SLURM_DIST_PLANE */
 	uint8_t power_flags;	/* power management flags,
 				 * see SLURM_POWER_FLAGS_ */
+	char *prefer;		/* soft feature specification,
+				 * default NONE */
 	uint32_t priority;	/* relative priority of the job,
 				 * explicitly set only for user root,
 				 * 0 == held (don't initiate) */
@@ -1769,6 +1773,7 @@ typedef struct job_info {
 	uint32_t num_nodes;	/* minimum number of nodes required by job */
 	uint32_t num_tasks;	/* requested task count */
 	char *partition;	/* name of assigned partition */
+	char *prefer;		/* comma separated list of soft features */
 	uint64_t pn_min_memory; /* minimum real memory per node, default=0 */
 	uint16_t pn_min_cpus;   /* minimum # CPUs per node, default=0 */
 	uint32_t pn_min_tmp_disk; /* minimum tmp disk per node, default=0 */
@@ -2676,6 +2681,7 @@ typedef struct reservation_name_msg {
 #define PREEMPT_MODE_REQUEUE	0x0002	/* requeue or kill jobs to preempt */
 
 #define PREEMPT_MODE_CANCEL	0x0008	/* always cancel the job */
+#define PREEMPT_MODE_COND_OFF	0x0010	/* represents PREEMPT_MODE_OFF in list*/
 #define PREEMPT_MODE_GANG	0x8000	/* enable gang scheduling */
 
 #define RECONFIG_KEEP_PART_INFO 0x0001 /* keep dynamic partition info on scontrol reconfig */

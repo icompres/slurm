@@ -41,7 +41,6 @@ source ./inc3.11.10
 source ./inc3.11.11
 
 set file_in		"test$test_id.input"
-set exit_code		0
 set res_name		""
 set res_name_save	""
 set res_nodes		""
@@ -120,22 +119,11 @@ if {[string compare $def_node ""] == 0} {
 	fail "Default partition seems to have no nodes"
 }
 
-spawn $sinfo -h -o "=%N=" -tIDLE -p $def_partition
-expect {
-	-re "=($re_word_str).($number)-($number).=" {
-		set def_node_name $expect_out(1,string)
-		set def_node_inx_min $expect_out(2,string)
-		set def_node_inx_max $expect_out(3,string)
-		exp_continue
-	}
-	eof {
-		wait
-	}
-}
-
 # Some tests do not support names of this form "rack[0-3]_blade[0-63]"
 set irregular_node_name 0
-if {[string compare $def_node_name ""] == 0} {
+set nodes_list [run_command_output -fail "$sinfo -h -o '%N' -tIDLE -p $def_partition"]
+set first_nodes [lindex [split $nodes_list ","] 0]
+if {![regexp "($re_word_str).($number)-($number)" $first_nodes - def_node_name def_node_inx_min def_node_inx_max]} {
 	log_warn "Node name format not supported for all test"
 	set irregular_node_name 1
 }
@@ -241,7 +229,3 @@ if {$cons_res_actived == 1 && $part_node_cores > 1 && $core_spec == 0 && $exclus
 }
 inc3_11_10
 inc3_11_11
-
-if {$exit_code != 0} {
-	fail "Test failed due to previous errors (\$exit_code = $exit_code)"
-}

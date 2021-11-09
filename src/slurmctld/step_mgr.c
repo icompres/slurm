@@ -314,9 +314,6 @@ static void _internal_step_complete(step_record_t *step_ptr, int remaining)
 	select_g_step_finish(step_ptr, false);
 
 	_step_dealloc_lps(step_ptr);
-	gres_ctld_step_dealloc(step_ptr->gres_list_alloc,
-			       job_ptr->gres_list_alloc, job_ptr->job_id,
-			       step_ptr->step_id.step_id);
 
 	/* Don't need to set state. Will be destroyed in next steps. */
 	/* step_ptr->state = JOB_COMPLETE; */
@@ -1064,7 +1061,7 @@ static bitstr_t *_pick_step_nodes(job_record_t *job_ptr,
 
 	if (step_spec->features &&
 	    (!job_ptr->details ||
-	     xstrcmp(step_spec->features, job_ptr->details->features))) {
+	     xstrcmp(step_spec->features, job_ptr->details->features_use))) {
 		/*
 		 * We only select for a single feature name here.
 		 * Ignore step features if equal to job features.
@@ -1861,7 +1858,7 @@ static int _pick_step_cores(step_record_t *step_ptr,
 	/* We need to over-subscribe one or more cores.
 	 * Use last_core_inx to avoid putting all of the extra
 	 * work onto core zero */
-	verbose("%s: %pS needs to over-subscribe cores required:%"PRIu16" assigned:%u/%"PRIu64 " overcommit:%c exclusive:%c",
+	verbose("%s: %pS needs to over-subscribe cores required:%u assigned:%u/%"PRIu64 " overcommit:%c exclusive:%c",
 		__func__, step_ptr, cores,
 		bit_set_count(job_resrcs_ptr->core_bitmap),
 		bit_size(job_resrcs_ptr->core_bitmap),
@@ -1921,6 +1918,7 @@ static int _step_alloc_lps(step_record_t *step_ptr)
 	int i_node, i_first, i_last;
 	int job_node_inx = -1, step_node_inx = -1;
 	bool first_step_node = true, pick_step_cores = true;
+	bool all_job_mem = false;
 	uint32_t rem_nodes;
 	int rc = SLURM_SUCCESS;
 	uint16_t req_tpc = NO_VAL16;
@@ -1968,6 +1966,9 @@ static int _step_alloc_lps(step_record_t *step_ptr)
 		step_ptr->pn_min_memory = 0;
 	}
 
+	if (!step_ptr->pn_min_memory)
+		all_job_mem = true;
+
 	rem_nodes = bit_set_count(step_ptr->step_node_bitmap);
 	step_ptr->memory_allocated = xcalloc(rem_nodes, sizeof(uint64_t));
 	for (i_node = i_first; i_node <= i_last; i_node++) {
@@ -1994,15 +1995,29 @@ static int _step_alloc_lps(step_record_t *step_ptr)
 			step_ptr->cpu_count = 0;
 
 		if (step_ptr->flags & SSF_WHOLE) {
-			cpus_alloc_mem = cpus_alloc =
+			cpus_alloc_mem =
+				job_resrcs_ptr->cpu_array_value[job_node_inx];
+			cpus_alloc =
 				job_resrcs_ptr->cpus[job_node_inx];
 		} else {
 			uint16_t cpus_per_task = step_ptr->cpus_per_task;
 			uint16_t vpus = node_record_table_ptr[i_node].vpus;
 
-			cpus_alloc_mem = cpus_alloc =
+			cpus_alloc =
 				step_ptr->step_layout->tasks[step_node_inx] *
 				cpus_per_task;
+
+			/*
+			 * If we are requesting all the memory in the job
+			 * (--mem=0) we get it all, otherwise we use what was
+			 * requested specifically for the step.
+			 */
+			if (all_job_mem)
+				cpus_alloc_mem =
+					job_resrcs_ptr->
+					cpu_array_value[job_node_inx];
+			else
+				cpus_alloc_mem = cpus_alloc;
 
 			/*
 			 * If we are doing threads per core we need the whole
@@ -2112,6 +2127,10 @@ static int _step_alloc_lps(step_record_t *step_ptr)
 		info("Step Alloc GRES:");
 	gres_step_state_log(step_ptr->gres_list_alloc, job_ptr->job_id,
 			    step_ptr->step_id.step_id);
+
+	if (rc != SLURM_SUCCESS)
+		_step_dealloc_lps(step_ptr);
+
 	return rc;
 }
 
@@ -2294,6 +2313,10 @@ static void _step_dealloc_lps(step_record_t *step_ptr)
 		}
 		FREE_NULL_BITMAP(step_ptr->core_bitmap_job);
 	}
+
+	gres_ctld_step_dealloc(step_ptr->gres_list_alloc,
+			       job_ptr->gres_list_alloc, job_ptr->job_id,
+			       step_ptr->step_id.step_id);
 }
 
 static int _test_strlen(char *test_str, char *str_name, int max_str_len)
@@ -2363,8 +2386,7 @@ static void _set_def_cpu_bind(job_record_t *job_ptr)
 		return;		/* No data structure */
 
 	bind_to_bits = CPU_BIND_TO_SOCKETS | CPU_BIND_TO_CORES |
-		       CPU_BIND_TO_THREADS | CPU_BIND_TO_LDOMS |
-		       CPU_BIND_TO_BOARDS;
+		       CPU_BIND_TO_THREADS | CPU_BIND_TO_LDOMS;
 	if ((job_ptr->details->cpu_bind_type != NO_VAL16) &&
 	    (job_ptr->details->cpu_bind_type & bind_to_bits)) {
 		if (slurm_conf.debug_flags & DEBUG_FLAG_CPU_BIND) {
@@ -2479,23 +2501,30 @@ static void _clear_zero_tres(char **tres_spec)
 }
 
 /*
- * If a job step specification does not include any TRES specification,
- * then copy those values from the job record
+ * If a job step specification does not include any GRES specification,
+ * then copy those values from the job record.
+ * Currently we only want to check if the step lacks a "gres" request.
+ * "tres_per_[step|task]" has "cpu:<count>" in it, so we need to search for
+ * "gres" in the strings.
  */
 static void _copy_job_tres_to_step(job_step_create_request_msg_t *step_specs,
 				   job_record_t *job_ptr)
 {
 	if (!xstrcasecmp(step_specs->tres_per_node, "NONE")) {
 		xfree(step_specs->tres_per_node);
-	} else if (step_specs->tres_per_step	||
-		   step_specs->tres_per_node	||
-		   step_specs->tres_per_socket	||
-		   step_specs->tres_per_task) {
+	} else if (xstrstr(step_specs->tres_per_step, "gres")	||
+		   xstrstr(step_specs->tres_per_node, "gres")	||
+		   xstrstr(step_specs->tres_per_socket, "gres")	||
+		   xstrstr(step_specs->tres_per_task, "gres")) {
 		_clear_zero_tres(&step_specs->tres_per_step);
 		_clear_zero_tres(&step_specs->tres_per_node);
 		_clear_zero_tres(&step_specs->tres_per_socket);
 		_clear_zero_tres(&step_specs->tres_per_task);
 	} else {
+		xfree(step_specs->tres_per_step);
+		xfree(step_specs->tres_per_node);
+		xfree(step_specs->tres_per_socket);
+		xfree(step_specs->tres_per_task);
 		step_specs->tres_per_step   = xstrdup(job_ptr->tres_per_job);
 		step_specs->tres_per_node   = xstrdup(job_ptr->tres_per_node);
 		step_specs->tres_per_socket = xstrdup(job_ptr->tres_per_socket);
@@ -3034,9 +3063,6 @@ extern int step_create(job_step_create_request_msg_t *step_specs,
 	}
 
 	*new_step_record = step_ptr;
-
-	if (!with_slurmdbd && !job_ptr->db_index)
-		jobacct_storage_g_job_start(acct_db_conn, job_ptr);
 
 	select_g_step_start(step_ptr);
 

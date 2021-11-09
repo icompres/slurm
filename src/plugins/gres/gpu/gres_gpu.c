@@ -57,6 +57,7 @@
 #include "src/common/gpu.h"
 #include "src/common/gres.h"
 #include "src/common/list.h"
+#include "src/common/strnatcmp.h"
 #include "src/common/xstring.h"
 
 #include "../common/gres_common.h"
@@ -166,6 +167,20 @@ static void _set_env(char ***env_ptr, bitstr_t *gres_bit_alloc,
 	}
 }
 
+/* Sort strings in natural sort ascending order, except sort nulls last */
+static int _sort_string_null_last(char *x, char *y)
+{
+	/* Make NULLs greater than non-NULLs, so NULLs are sorted last */
+	if (!x && y)
+		return 1;
+	else if (x && !y)
+		return -1;
+	else if (!x && !y)
+		return 0;
+
+	return strnatcmp(x, y);
+}
+
 /*
  * Sort gres/gpu records by descending length of type_name. If length is equal,
  * sort by ascending type_name. If still equal, sort by ascending file name.
@@ -199,7 +214,8 @@ static int _sort_gpu_by_type_name(void *x, void *y)
 
 	/* Sort by file name if type name value is equal */
 	if (ret == 0)
-		ret = xstrcmp(gres_record1->file, gres_record2->file);
+		ret = _sort_string_null_last(gres_record1->file,
+					     gres_record2->file);
 
 	return ret;
 }
@@ -228,6 +244,19 @@ static int _find_type_in_gres_list(void *x, void *key)
 		return 0;
 }
 
+static int _find_nonnull_type_in_gres_list(void *x, void *key)
+{
+	gres_slurmd_conf_t *conf_gres = (gres_slurmd_conf_t *) x;
+
+	if (!conf_gres)
+		return 0;
+
+	if (conf_gres->type_name && conf_gres->type_name[0])
+		return 1;
+
+	return 0;
+}
+
 /*
  * Sync the GRES type of each device detected on the system (gres_list_system)
  * to its corresponding GRES type specified in [gres|slurm].conf. In effect, the
@@ -241,10 +270,20 @@ static void _normalize_sys_gres_types(List gres_list_system,
 {
 	gres_slurmd_conf_t *sys_gres, *conf_gres;
 	ListIterator itr;
+	bool strip_type = true;
 
 	/* No need to sync anything if configured GRES list is empty */
 	if (!gres_list_conf_single || list_count(gres_list_conf_single) == 0)
 		return;
+
+	/*
+	 * Determine if any of the existing GRES have their types defined. If
+	 * have a type, then all GRES must have a type defined and stripping the
+	 * type is not helpful
+	 */
+	if (list_find_first(gres_list_conf_single,
+			    _find_nonnull_type_in_gres_list, NULL))
+		strip_type = false;
 
 	/*
 	 * Sort conf and sys gres lists by longest GRES type to shortest, so we
@@ -260,10 +299,12 @@ static void _normalize_sys_gres_types(List gres_list_system,
 					    _find_type_in_gres_list,
 					    sys_gres->type_name);
 		if (!conf_gres) {
-			info("Could not find an unused configuration record with a GRES type that is a substring of system device `%s`. Setting system GRES type to NULL",
-			     sys_gres->type_name);
-			xfree(sys_gres->type_name);
-			sys_gres->config_flags &= ~GRES_CONF_HAS_TYPE;
+			if (strip_type) {
+				info("Could not find an unused configuration record with a GRES type that is a substring of system device `%s`. Setting system GRES type to NULL",
+				     sys_gres->type_name);
+				xfree(sys_gres->type_name);
+				sys_gres->config_flags &= ~GRES_CONF_HAS_TYPE;
+			}
 			continue;
 		}
 
@@ -347,53 +388,13 @@ static int _validate_cpus_links(gres_slurmd_conf_t *conf_gres,
 	return 1;
 }
 
-/* Given a file name return its numeric suffix */
-static int _file_inx(char *fname)
-{
-	int i, len, mult = 1, num, val = 0;
-
-	if (!fname)
-		return 0;
-	len = strlen(fname);
-	if (len == 0)
-		return val;
-	for (i = 1; i <= len; i++) {
-		if ((fname[len - i] < '0') ||
-		    (fname[len - i] > '9'))
-			break;
-		num = fname[len - i] - '0';
-		val += (num * mult);
-		mult *= 10;
-	}
-	return val;
-}
-
-/* Sort gres/gpu records by "File" value */
-static int _sort_gpu_by_file(void *x, void *y, bool asc)
+/* Sort gres/gpu records by "File" value in ascending order, with nulls last */
+static int _sort_gpu_by_file(void *x, void *y)
 {
 	gres_slurmd_conf_t *gres_record1 = *(gres_slurmd_conf_t **) x;
 	gres_slurmd_conf_t *gres_record2 = *(gres_slurmd_conf_t **) y;
-	int val1, val2;
 
-	val1 = _file_inx(gres_record1->file);
-	val2 = _file_inx(gres_record2->file);
-
-	if (asc)
-		return (val1 - val2);
-	else
-		return -(val1 - val2);
-}
-
-/* Sort gres/gpu records by "File" value in descending order (nulls first) */
-static int _sort_gpu_by_file_desc(void *x, void *y)
-{
-	return _sort_gpu_by_file(x, y, false);
-}
-
-/* Sort gres/gpu records by "File" value in ascending order */
-static int _sort_gpu_by_file_asc(void *x, void *y)
-{
-	return _sort_gpu_by_file(x, y, true);
+	return _sort_string_null_last(gres_record1->file, gres_record2->file);
 }
 
 /*
@@ -548,10 +549,14 @@ static void _merge_system_gres_conf(List gres_list_conf, List gres_list_system)
 	 */
 	_normalize_sys_gres_types(gres_list_system, gres_list_conf_single);
 
-	/* Sort so null files are last for _match_gres() */
-	list_sort(gres_list_conf_single, _sort_gpu_by_file_desc);
+	/*
+	 *  Sort null files last, so that conf records with a specified File
+	 *  are matched first in _match_gres(). Then, conf records without a
+	 *  File can fill in any remaining holes.
+	 */
+	list_sort(gres_list_conf_single, _sort_gpu_by_file);
 	/* Sort system devices in the same way for convenience */
-	list_sort(gres_list_system, _sort_gpu_by_file_desc);
+	list_sort(gres_list_system, _sort_gpu_by_file);
 
 	itr = list_iterator_create(gres_list_conf_single);
 	itr2 = list_iterator_create(gres_list_system);
@@ -663,7 +668,7 @@ static void _merge_system_gres_conf(List gres_list_conf, List gres_list_system)
 	list_flush(gres_list_conf);
 	if (gres_list_gpu && list_count(gres_list_gpu)) {
 		/* Sort by device file first, in case no links */
-		list_sort(gres_list_gpu, _sort_gpu_by_file_asc);
+		list_sort(gres_list_gpu, _sort_gpu_by_file);
 		/* Sort by links, which is a stand-in for PCI bus ID order */
 		list_sort(gres_list_gpu, _sort_gpu_by_links_order);
 		debug2("gres_list_gpu");
@@ -882,8 +887,11 @@ extern int gres_p_node_config_load(List gres_conf_list,
 	}
 
 	gres_list_system = _get_system_gpu_list_fake();
-	// Only query real system devices if there is no fake override
-	if (!gres_list_system)
+	/*
+	 * Only query real system devices if there is no fake override and we
+	 * are running in the slurmd.
+	 */
+	if (!gres_list_system && node_config->in_slurmd)
 		gres_list_system = gpu_g_get_system_gpu_list(node_config);
 
 	if (slurm_conf.debug_flags & DEBUG_FLAG_GRES)
@@ -895,22 +903,23 @@ extern int gres_p_node_config_load(List gres_conf_list,
 			log_var(log_lvl,
 				"There were 0 GPUs detected on the system");
 		log_var(log_lvl,
-			"%s: Merging gres.conf with system GPUs",
+			"%s: Merging configured GRES with system GPUs",
 			plugin_name);
 		_merge_system_gres_conf(gres_conf_list, gres_list_system);
 		FREE_NULL_LIST(gres_list_system);
 
 		if (!gres_conf_list || list_is_empty(gres_conf_list))
-			log_var(log_lvl, "%s: Final merged gres.conf list is empty",
+			log_var(log_lvl, "%s: Final merged GRES list is empty",
 				plugin_name);
 		else {
-			log_var(log_lvl, "%s: Final merged gres.conf list:",
+			log_var(log_lvl, "%s: Final merged GRES list:",
 				plugin_name);
 			print_gres_list(gres_conf_list, log_lvl);
 		}
 	}
 
-	rc = common_node_config_load(gres_conf_list, gres_name, &gres_devices);
+	rc = common_node_config_load(gres_conf_list, gres_name, node_config,
+				     &gres_devices);
 
 	/*
 	 * See what envs the gres_slurmd_conf records want to set (if one

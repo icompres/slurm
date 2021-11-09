@@ -18,6 +18,13 @@ displayed about partitions that are configured as hidden and partitions that
 are unavailable to the user's group.
 
 .TP
+\fB\-M\fR, \fB\-\-clusters\fR=<\fIstring\fR>
+Clusters to issue commands to.  Multiple cluster names may be comma separated.
+A value of '\fBall\fR' will query all clusters. Note that the
+\fBSlurmDBD\fR must be up for this option to work properly.
+This option implicitly sets the \fB\-\-local\fR option.
+
+.TP
 \fB\-d\fR, \fB\-\-dead\fR
 If set, only report state information for non\-responding (dead) nodes.
 
@@ -34,72 +41,7 @@ same partition and state (e.g. "250+").
 Show all partitions from the federation if a member of one.
 
 .TP
-\fB\-h\fR, \fB\-\-noheader\fR
-Do not print a header on the output.
-
-.TP
-\fB\-\-help\fR
-Print a message describing all \fBsinfo\fR options.
-
-.TP
-\fB\-\-hide\fR
-Do not display information about hidden partitions. Partitions
-that are configured as hidden or are not available to the user's group
-will not be displayed. This is the default behavior.
-
-.TP
-\fB\-i <seconds>\fR, \fB\-\-iterate=<seconds>\fR
-Print the state on a periodic basis.
-Sleep for the indicated number of seconds between reports.
-By default prints a time stamp with the header.
-
-.TP
-\f3\-\-json\fP
-Dump node information as JSON. All other formating and filtering arugments will
-be ignored.
-
-.TP
-\fB\-\-local\fR
-Show only jobs local to this cluster. Ignore other clusters in this federation
-(if any). Overrides \fB\-\-federation\fR.
-
-.TP
-\fB\-l\fR, \fB\-\-long\fR
-Print more detailed information.
-This is ignored if the \fB\-\-format\fR option is specified.
-
-.TP
-\fB\-M\fR, \fB\-\-clusters\fR=<\fIstring\fR>
-Clusters to issue commands to.  Multiple cluster names may be comma separated.
-A value of '\fBall\fR' will query all clusters. Note that the
-\fBSlurmDBD\fR must be up for this option to work properly.
-This option implicitly sets the \fB\-\-local\fR option.
-
-.TP
-\fB\-n <nodes>\fR, \fB\-\-nodes=<nodes>\fR
-Print information about the specified node(s).
-Multiple nodes may be comma separated or expressed using a
-node range expression (e.g. "linux[00\-17]")
-Limiting the query to just the relevant nodes can measurably improve the
-performance of the command for large clusters.
-
-.TP
-\fB\-\-noconvert\fR
-Don't convert units from their original type (e.g. 2048M won't be converted to
-2G).
-
-.TP
-\fB\-N\fR, \fB\-\-Node\fR
-Print information in a node\-oriented format with one line per node
-and partition. That is, if a node belongs to more than one partition, then one
-line for each node\-partition pair will be shown.
-If \fB\-\-partition\fR is also specified, then only one line per node in this
-partition is shown.
-The default is to print information in a partition\-oriented format.
-This is ignored if the \fB\-\-format\fR option is specified.
-
-.TP
-\fB\-o <output_format>\fR, \fB\-\-format=<output_format>\fR
+\fB\-o\fR, \fB\-\-format\fR=<\fIoutput_format\fR>
 Specify the information to be displayed using an \fBsinfo\fR
 format string.
 If the command is executed in a federated cluster environment and information
@@ -301,7 +243,7 @@ Extended processor information: number of sockets, cores, threads (S:C:T) per no
 .RE
 
 .TP
-\fB\-O <output_format>\fR, \fB\-\-Format=<output_format>\fR
+\fB\-O\fR, \fB\-\-Format\fR=<\fIoutput_format\fR>
 Specify the information to be displayed.
 Also see the \fB\-o <output_format>\fR, \fB\-\-format=<output_format>\fR
 option (which supports greater flexibility in formatting, but
@@ -486,13 +428,25 @@ Scheduling weight of the nodes.
 .RE
 
 .TP
-\fB\-p <partition>\fR, \fB\-\-partition=<partition>\fR
-Print information only about the specified partition(s). Multiple partitions
-are separated by commas.
+\fB\-\-help\fR
+Print a message describing all \fBsinfo\fR options.
 
 .TP
-\fB\-r\fR, \fB\-\-responding\fR
-If set only report state information for responding nodes.
+\fB\-\-hide\fR
+Do not display information about hidden partitions. Partitions
+that are configured as hidden or are not available to the user's group
+will not be displayed. This is the default behavior.
+
+.TP
+\fB\-i\fR, \fB\-\-iterate\fR=<\fIseconds\fR>
+Print the state on a periodic basis.
+Sleep for the indicated number of seconds between reports.
+By default prints a time stamp with the header.
+
+.TP
+\f3\-\-json\fP
+Dump node information as JSON. All other formating and filtering arugments will
+be ignored.
 
 .TP
 \fB\-R\fR, \fB\-\-list\-reasons\fR
@@ -511,12 +465,60 @@ When used with \fB\-l\fR the output additionally includes
 the current node state.
 
 .TP
-\fB\-s\fR, \fB\-\-summarize\fR
-List only a partition state summary with no node state details.
+\fB\-\-local\fR
+Show only jobs local to this cluster. Ignore other clusters in this federation
+(if any). Overrides \fB\-\-federation\fR.
+
+.TP
+\fB\-l\fR, \fB\-\-long\fR
+Print more detailed information.
 This is ignored if the \fB\-\-format\fR option is specified.
 
 .TP
-\fB\-S <sort_list>\fR, \fB\-\-sort=<sort_list>\fR
+\fB\-\-noconvert\fR
+Don't convert units from their original type (e.g. 2048M won't be converted to
+2G).
+
+.TP
+\fB\-N\fR, \fB\-\-Node\fR
+Print information in a node\-oriented format with one line per node
+and partition. That is, if a node belongs to more than one partition, then one
+line for each node\-partition pair will be shown.
+If \fB\-\-partition\fR is also specified, then only one line per node in this
+partition is shown.
+The default is to print information in a partition\-oriented format.
+This is ignored if the \fB\-\-format\fR option is specified.
+
+.TP
+\fB\-n\fR, \fB\-\-nodes\fR=<\fInodes\fR>
+Print information about the specified node(s).
+Multiple nodes may be comma separated or expressed using a
+node range expression (e.g. "linux[00\-17]")
+Limiting the query to just the relevant nodes can measurably improve the
+performance of the command for large clusters.
+
+.TP
+\fB\-h\fR, \fB\-\-noheader\fR
+Do not print a header on the output.
+
+.TP
+\fB\-p\fR, \fB\-\-partition\fR=<\fIpartition\fR>
+Print information only about the specified partition(s). Multiple partitions
+are separated by commas.
+
+.TP
+\fB\-T\fR, \fB\-\-reservation\fR
+Only display information about Slurm reservations.
+
+\fBNOTE\fR: This option causes \fBsinfo\fR to ignore most other options,
+which are focused on partition and node information.
+
+.TP
+\fB\-r\fR, \fB\-\-responding\fR
+If set only report state information for responding nodes.
+
+.TP
+\fB\-S\fR, \fB\-\-sort\fR=<\fIsort_list\fR>
 Specification of the order in which records should be reported.
 This uses the same field specification as the <output_format>.
 Multiple sorts may be performed by listing multiple sort fields
@@ -533,7 +535,7 @@ node state).  If the \fB\-\-Node\fR option is selected, the
 default sort value is "N" (increasing node name).
 
 .TP
-\fB\-t <states>\fR , \fB\-\-states=<states>\fR
+\fB\-t\fR, \fB\-\-states\fR=<\fIstates\fR>
 List nodes only having the given state(s).  Multiple states
 may be comma separated and the comparison is case insensitive.
 If the states are separated by '&', then the nodes must be in all states.
@@ -549,11 +551,9 @@ The \fB\-\-dead\fR and \fB\-\-responding\fR options may be
 used to filter nodes by the corresponding flag.
 
 .TP
-\fB\-T\fR, \fB\-\-reservation\fR
-Only display information about Slurm reservations.
-
-\fBNOTE\fR: This option causes \fBsinfo\fR to ignore most other options,
-which are focused on partition and node information.
+\fB\-s\fR, \fB\-\-summarize\fR
+List only a partition state summary with no node state details.
+This is ignored if the \fB\-\-format\fR option is specified.
 
 .TP
 \fB\-\-usage\fR
@@ -868,57 +868,57 @@ Report basic node and partition configurations:
 .nf
 $ sinfo
 PARTITION AVAIL TIMELIMIT NODES STATE  NODELIST
-batch     up     infinite     2 alloc  adev[8-9]
-batch     up     infinite     6 idle   adev[10-15]
-debug*    up        30:00     8 idle   adev[0-7]
+batch     up     infinite     2 alloc  adev[8\-9]
+batch     up     infinite     6 idle   adev[10\-15]
+debug*    up        30:00     8 idle   adev[0\-7]
 .fi
 
 .TP
 Report partition summary information:
 
 .nf
-$ sinfo -s
+$ sinfo \-s
 PARTITION AVAIL TIMELIMIT NODES(A/I/O/T) NODELIST
-batch     up     infinite 2/6/0/8        adev[8-15]
-debug*    up        30:00 0/8/0/8        adev[0-7]
+batch     up     infinite 2/6/0/8        adev[8\-15]
+debug*    up        30:00 0/8/0/8        adev[0\-7]
 .fi
 
 .TP
 Report more complete information about the partition debug:
 
 .nf
-$ sinfo --long --partition=debug
+$ sinfo \-\-long \-\-partition=debug
 PARTITION AVAIL TIMELIMIT JOB_SIZE ROOT OVERSUBS GROUPS NODES STATE NODELIST
-debug*    up        30:00        8 no   no       all        8 idle  dev[0-7]
+debug*    up        30:00        8 no   no       all        8 idle  dev[0\-7]
 .fi
 
 .TP
 Report only those nodes that are in state DRAINED:
 
 .nf
-$ sinfo --states=drained
+$ sinfo \-\-states=drained
 PARTITION AVAIL NODES TIMELIMIT STATE  NODELIST
-debug*    up        2     30:00 drain  adev[6-7]
+debug*    up        2     30:00 drain  adev[6\-7]
 .fi
 
 .TP
-Report node-oriented information with details and exact matches:
+Report node\-oriented information with details and exact matches:
 
 .nf
-$ sinfo -Nel
+$ sinfo \-Nel
 NODELIST    NODES PARTITION STATE  CPUS MEMORY TMP_DISK WEIGHT FEATURES REASON
-adev[0-1]       2 debug*    idle      2   3448    38536     16 (null)   (null)
-adev[2,4-7]     5 debug*    idle      2   3384    38536     16 (null)   (null)
+adev[0\-1]       2 debug*    idle      2   3448    38536     16 (null)   (null)
+adev[2,4\-7]     5 debug*    idle      2   3384    38536     16 (null)   (null)
 adev3           1 debug*    idle      2   3394    38536     16 (null)   (null)
-adev[8-9]       2 batch     allocated 2    246    82306     16 (null)   (null)
-adev[10-15]     6 batch     idle      2    246    82306     16 (null)   (null)
+adev[8\-9]       2 batch     allocated 2    246    82306     16 (null)   (null)
+adev[10\-15]     6 batch     idle      2    246    82306     16 (null)   (null)
 .fi
 
 .TP
 Report only down, drained and draining nodes and their reason field:
 
 .nf
-$ sinfo -R
+$ sinfo \-R
 REASON                              NODELIST
 Memory errors                       dev[0,5]
 Not Responding                      dev8

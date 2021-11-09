@@ -26,15 +26,14 @@
 ############################################################################
 source ./globals
 
-set exit_code   0
-set file_in     "test$test_id.input"
+set file_in     "$test_dir/input"
 set number_commas  "\[0-9_,\]+"
 
 if {![check_config_select "cons_tres"]} {
 	skip "This test is only compatible with select/cons_tres"
 }
-if {[get_config_param "ConstrainDevices"] ne "yes"} {
-	skip "This test is only compatible with ConstrainDevices=Yes in cgroup.conf"
+if {![param_contains [get_config_param "TaskPlugin"] "*cgroup"] || [get_config_param "ConstrainDevices"] ne "yes"} {
+	skip "This test is only compatible with TaskPlugin=cgroup,... in slurm.conf and ConstrainDevices=Yes in cgroup.conf"
 }
 
 set gpu_cnt [get_highest_gres_count 1 "gpu"]
@@ -59,15 +58,9 @@ if {$cpus_per_node < 2} {
 	skip "This test requires 2 or more CPUs per node in the default partition"
 }
 
-proc cleanup {} {
-	global bin_rm file_in
-	exec $bin_rm -f $file_in
-}
-
 #
 # Build input script file
 #
-exec $bin_rm -f $file_in
 make_bash_script $file_in "echo HOST:\$SLURMD_NODENAME CUDA_VISIBLE_DEVICES:\$CUDA_VISIBLE_DEVICES
 if \[ \$SLURM_PROCID -eq 0 \]; then
    $scontrol -dd show job \$SLURM_JOB_ID
@@ -80,7 +73,7 @@ if {$sockets_per_node < 2} {
 	log_warn "Tests ${test_id}.0 and ${test_id}.1 require 2 or more sockets per node in the default partition"
 } else {
 	log_info "TEST ${test_id}.0"
-	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-socket=1 --sockets-per-node=2 -n2 --accel-bind=g -J "test$test_id" -t1 ./$file_in]
+	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-socket=1 --sockets-per-node=2 -n2 --accel-bind=g -J "test$test_id" -t1 $file_in]
 	expect {
 		timeout {
 			slow_kill $srun_pid
@@ -95,7 +88,7 @@ if {$sockets_per_node < 2} {
 	# Test of --gpu-bind=closest
 	#
 	log_info "TEST ${test_id}.1"
-	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-socket=1 --sockets-per-node=2 -n2 --gpu-bind=closest -J "test$test_id" -t1 ./$file_in]
+	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-socket=1 --sockets-per-node=2 -n2 --gpu-bind=closest -J "test$test_id" -t1 $file_in]
 	expect {
 		timeout {
 			slow_kill $srun_pid
@@ -127,19 +120,19 @@ if {$gpu_cnt < 4} {
 #
 set matches 0
 if {$gpu_cnt > $cpus_per_node} {
-	set srun_pid [spawn $srun --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$map_gpu -J "test$test_id" -l -t1 ./$file_in]
+	set srun_pid [spawn $srun --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$map_gpu -J "test$test_id" -l -t1 $file_in]
 } else {
-	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$map_gpu -J "test$test_id" -l -t1 ./$file_in]
+	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$map_gpu -J "test$test_id" -l -t1 $file_in]
 }
 expect {
 	-re "($number): HOST:($re_word_str) CUDA_VISIBLE_DEVICES:($number)" {
-		if       {$expect_out(1,string) == 0 && $expect_out(3,string) == 1} {
+		if       {$expect_out(1,string) == 0 && $expect_out(3,string) == 0} {
 			incr matches
 		} elseif {$expect_out(1,string) == 1 && $expect_out(3,string) == 0} {
 			incr matches
-		} elseif {$expect_out(1,string) == 2 && $expect_out(3,string) == 3} {
+		} elseif {$expect_out(1,string) == 2 && $expect_out(3,string) == 0} {
 			incr matches
-		} elseif {$expect_out(1,string) == 3 && $expect_out(3,string) == 2} {
+		} elseif {$expect_out(1,string) == 3 && $expect_out(3,string) == 0} {
 			incr matches
 		}
 		exp_continue
@@ -152,10 +145,7 @@ expect {
 		wait
 	}
 }
-if {$matches != $match_goal} {
-	log_error "--gpu-bind=$map_gpu not respected ($matches != $match_goal)"
-	set exit_code 1
-}
+subtest {$matches == $match_goal} "Verify --gpu-bind=$map_gpu is respected" "$matches != $match_goal"
 
 #
 # Test of --gpu-bind=mask_gpu
@@ -163,9 +153,9 @@ if {$matches != $match_goal} {
 #
 log_info "TEST ${test_id}.3"
 if {$gpu_cnt < 4} {
-	set mask_gpu "mask_gpu:0x3,0x1"
+	set mask_gpu "mask_gpu:0x3,0x2"
 } else {
-	set mask_gpu "mask_gpu:0x3,0x1,0x5,9"
+	set mask_gpu "mask_gpu:0x3,0x2,0x5,0xF"
 }
 
 set matches 0
@@ -173,9 +163,9 @@ set matches 0
 # If $gpu_cnt > $cpus_per_node then assume there is no DefCpusPerGpu configured
 #
 if {$gpu_cnt > $cpus_per_node} {
-	set srun_pid [spawn $srun --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$mask_gpu -J "test$test_id" -l -t1 ./$file_in]
+	set srun_pid [spawn $srun --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$mask_gpu -J "test$test_id" -l -t1 $file_in]
 } else {
-	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$mask_gpu -J "test$test_id" -l -t1 ./$file_in]
+	set srun_pid [spawn $srun --cpus-per-gpu=1 --gpus-per-node=$gpu_cnt --ntasks=$tasks_per_node -N1 -l --gpu-bind=$mask_gpu -J "test$test_id" -l -t1 $file_in]
 }
 expect {
 	-re "($number): HOST:($re_word_str) CUDA_VISIBLE_DEVICES:($number_commas)" {
@@ -183,9 +173,9 @@ expect {
 			incr matches
 		} elseif {$expect_out(1,string) == 1 && $expect_out(3,string) eq "0"} {
 			incr matches
-		} elseif {$expect_out(1,string) == 2 && $expect_out(3,string) eq "0,2"} {
+		} elseif {$expect_out(1,string) == 2 && $expect_out(3,string) eq "0,1"} {
 			incr matches
-		} elseif {$expect_out(1,string) == 3 && $expect_out(3,string) eq "0,3"} {
+		} elseif {$expect_out(1,string) == 3 && $expect_out(3,string) eq "0,1,2,3"} {
 			incr matches
 		}
 		exp_continue
@@ -198,10 +188,4 @@ expect {
 		wait
 	}
 }
-if {$matches != $match_goal} {
-	fail "--gpu-bind=$mask_gpu not respected ($matches != $match_goal)"
-}
-
-if {$exit_code} {
-	fail "Test failed due to previous errors (\$exit_code = $exit_code)"
-}
+subtest {$matches == $match_goal} "Verify --gpu-bind=$mask_gpu is respected" "$matches != $match_goal"

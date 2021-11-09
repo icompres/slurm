@@ -455,8 +455,17 @@ extern int load_all_node_state ( bool state_only )
 			       node_name);
 		} else if (state_only) {
 			uint32_t orig_flags;
-			if (IS_NODE_CLOUD(node_ptr) ||
-			    (node_state & NODE_STATE_DYNAMIC)) {
+			if ((IS_NODE_CLOUD(node_ptr) ||
+			    (node_state & NODE_STATE_DYNAMIC)) &&
+			    comm_name && node_hostname) {
+				/* Recover NodeAddr and NodeHostName */
+				set_node_comm_name(node_ptr,
+						   comm_name,
+						   node_hostname);
+				comm_name = NULL;
+				node_hostname = NULL;
+			}
+			if (IS_NODE_CLOUD(node_ptr)) {
 				if ((!power_save_mode) &&
 				    ((node_state & NODE_STATE_POWERED_DOWN) ||
 				     (node_state & NODE_STATE_POWERING_DOWN) ||
@@ -469,15 +478,31 @@ extern int load_all_node_state ( bool state_only )
 					else
 						hs = hostset_create(node_name);
 				}
-				if (comm_name && node_hostname) {
-					/* Recover NodeAddr and NodeHostName */
-					set_node_comm_name(node_ptr,
-							   comm_name,
-							   node_hostname);
-					comm_name = NULL;
-					node_hostname = NULL;
+				/*
+				 * Replace FUTURE state with new state (idle),
+				 * but preserve recovered state flags
+				 * (e.g. POWER*).
+				 */
+				if ((node_state & NODE_STATE_BASE) ==
+				    NODE_STATE_FUTURE) {
+					node_state =
+						((node_ptr->node_state &
+						  NODE_STATE_BASE) |
+						 (node_state &
+						  NODE_STATE_FLAGS));
+
+					/*
+					 * If node was FUTURE, then it wasn't up
+					 * so mark it as powered down.
+					 */
+					if (power_save_mode)
+						node_state |=
+							NODE_STATE_POWERED_DOWN;
 				}
-				node_ptr->node_state    = node_state;
+
+				node_ptr->node_state =
+					node_state | NODE_STATE_CLOUD;
+
 			} else if (IS_NODE_UNKNOWN(node_ptr)) {
 				if (base_state == NODE_STATE_DOWN) {
 					orig_flags = node_ptr->node_state &
@@ -2780,6 +2805,11 @@ extern int validate_node_specs(slurm_msg_t *slurm_msg, bool *newly_up)
 		}
 	} else {
 		if (IS_NODE_UNKNOWN(node_ptr) || IS_NODE_FUTURE(node_ptr)) {
+			bool unknown = 0;
+
+			if (IS_NODE_UNKNOWN(node_ptr))
+				unknown = 1;
+
 			debug("validate_node_specs: node %s registered with "
 			      "%u jobs",
 			      reg_msg->node_name,reg_msg->job_count);
@@ -2801,7 +2831,7 @@ extern int validate_node_specs(slurm_msg_t *slurm_msg, bool *newly_up)
 			last_node_update = now;
 
 			/* don't send this on a slurmctld unless needed */
-			if (IS_NODE_UNKNOWN(node_ptr) && slurmctld_init_db
+			if (unknown && slurmctld_init_db
 			    && !IS_NODE_DRAIN(node_ptr)
 			    && !IS_NODE_FAIL(node_ptr)) {
 				/* reason information is handled in

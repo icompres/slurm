@@ -162,8 +162,6 @@ void slurm_sprint_cpu_bind_type(char *str, cpu_bind_type_t cpu_bind_type)
 		strcat(str, "sockets,");
 	if (cpu_bind_type & CPU_BIND_TO_LDOMS)
 		strcat(str, "ldoms,");
-	if (cpu_bind_type & CPU_BIND_TO_BOARDS)
-		strcat(str, "boards,");
 	if (cpu_bind_type & CPU_BIND_NONE)
 		strcat(str, "none,");
 	if (cpu_bind_type & CPU_BIND_RANK)
@@ -259,13 +257,12 @@ void slurm_print_cpu_bind_help(void)
 "        cores           auto-generated masks bind to cores\n"
 "        threads         auto-generated masks bind to threads\n"
 "        ldoms           auto-generated masks bind to NUMA locality domains\n"
-"        boards          auto-generated masks bind to boards\n"
 "        help            show this help message\n");
 	}
 }
 
 /*
- * verify cpu_bind arguments, set default values as needed
+ * verify cpu_bind arguments
  *
  * we support different launch policy names
  * we also allow a verbose setting to be specified
@@ -280,7 +277,6 @@ void slurm_print_cpu_bind_help(void)
  * arg IN - user task binding option
  * cpu_bind OUT - task binding string
  * flags OUT OUT - task binding flags
- * default_cpu_bind IN - default task binding (based upon Slurm configuration)
  * RET SLURM_SUCCESS, SLURM_ERROR (-1) on failure, 1 for return for "help" arg
  */
 extern int slurm_verify_cpu_bind(const char *arg, char **cpu_bind,
@@ -296,8 +292,7 @@ extern int slurm_verify_cpu_bind(const char *arg, char **cpu_bind,
 		    CPU_BIND_MASK | CPU_BIND_LDRANK | CPU_BIND_LDMAP |
 		    CPU_BIND_LDMASK;
 	bind_to_bits = CPU_BIND_TO_SOCKETS | CPU_BIND_TO_CORES |
-		       CPU_BIND_TO_THREADS | CPU_BIND_TO_LDOMS |
-		       CPU_BIND_TO_BOARDS;
+		       CPU_BIND_TO_THREADS | CPU_BIND_TO_LDOMS;
 
     	buf = xstrdup(arg);
     	p = buf;
@@ -410,10 +405,6 @@ extern int slurm_verify_cpu_bind(const char *arg, char **cpu_bind,
 		           (xstrcasecmp(tok, "ldoms") == 0)) {
 			_clear_then_set((int *)flags, bind_to_bits,
 				       CPU_BIND_TO_LDOMS);
-		} else if ((xstrcasecmp(tok, "board") == 0) ||
-		           (xstrcasecmp(tok, "boards") == 0)) {
-			_clear_then_set((int *)flags, bind_to_bits,
-				       CPU_BIND_TO_BOARDS);
 		} else {
 			error("unrecognized --cpu-bind argument \"%s\"", tok);
 			rc = SLURM_ERROR;
@@ -450,15 +441,6 @@ extern int xlate_cpu_bind_str(char *cpu_bind_str, uint32_t *flags)
 				break;
 			} else {
 				*flags |= CPU_BIND_NONE;
-				have_bind_type = true;
-			}
-		} else if ((xstrcasecmp(tok, "board") == 0) ||
-			   (xstrcasecmp(tok, "boards") == 0)) {
-			if (have_bind_type) {
-				rc = SLURM_ERROR;
-				break;
-			} else {
-				*flags |= CPU_BIND_TO_BOARDS;
 				have_bind_type = true;
 			}
 		} else if ((xstrcasecmp(tok, "socket") == 0) ||

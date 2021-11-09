@@ -1,7 +1,7 @@
 /*****************************************************************************\
- *  acct_gather_energy_rsmi.c - slurm energy accounting plugin for AMD GPU.
+ *  acct_gather_energy_gpu.c - slurm energy accounting plugin for GPUs.
  *****************************************************************************
- *  Copyright (C) 2019 SchedMD LLC
+ *  Copyright (C) 2019-2021 SchedMD LLC
  *  Copyright (c) 2019, Advanced Micro Devices, Inc. All rights reserved.
  *  Written by Advanced Micro Devices,
  *  who borrowed from the ipmi plugin of the same type
@@ -37,25 +37,17 @@
  *
 \*****************************************************************************/
 
-/* acct_gather_energy_rsmi
- * This plugin initiates a node-level thread, which is running in Slurmd daemon
- * and reads periodically the current average energy from the AMD GPUs through
- * RSMI interface. It collects the energy consumption for all AMD GPUs for a
- * node. It is also running in Slurmstepd daemon and collects the energy
- * consumption for a job.
- */
-
-#include <rocm_smi/rocm_smi.h>
 #include <dlfcn.h>
 
 #include "src/common/slurm_xlator.h"
 #include "src/common/cgroup.h"
 #include "src/common/slurm_acct_gather_energy.h"
 #include "src/common/slurm_acct_gather_profile.h"
+#include "src/common/gpu.h"
 #include "src/common/gres.h"
 
-#define DEFAULT_RSMI_TIMEOUT 10
-#define DEFAULT_RSMI_FREQ 30
+#define DEFAULT_GPU_TIMEOUT 10
+#define DEFAULT_GPU_FREQ 30
 
 /*
  * These variables are required by the generic plugin interface.  If they
@@ -82,17 +74,9 @@
  * plugin_version - an unsigned 32-bit integer containing the Slurm version
  * (major.minor.micro combined into a single number).
  */
-const char plugin_name[] = "AcctGatherEnergy rsmi plugin";
-const char plugin_type[] = "acct_gather_energy/rsmi";
+const char plugin_name[] = "AcctGatherEnergy gpu plugin";
+const char plugin_type[] = "acct_gather_energy/gpu";
 const uint32_t plugin_version = SLURM_VERSION_NUMBER;
-
-// array of struct to track the status of a GPU
-typedef struct {
-	uint32_t last_update_watt;
-	time_t last_update_time;
-	time_t previous_update_time;
-	acct_gather_energy_t energy;
-} gpu_status_t;
 
 /*
  * internal variables
@@ -109,15 +93,15 @@ static int dataset_id = -1; // id of the dataset for profile data
 
 static bool flag_energy_accounting_shutdown = false;
 static bool flag_thread_started = false;
-static pthread_mutex_t rsmi_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t rsmi_cond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t gpu_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gpu_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t launch_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t launch_cond = PTHREAD_COND_INITIALIZER;
 
 static stepd_step_rec_t *job = NULL;
 
-pthread_t thread_rsmi_id_launcher = 0;
-pthread_t thread_rsmi_id_run = 0;
+pthread_t thread_gpu_id_launcher = 0;
+pthread_t thread_gpu_id_run = 0;
 
 /*
  * Check running profile
@@ -188,33 +172,6 @@ static int _send_profile(void)
 }
 
 /*
- * _read_rsmi_value read current average watts and update last_update_watt
- *
- * dv_ind         (IN) The device index
- * energy         (IN) A pointer to gpu_status_t structure
- */
-static int _read_rsmi_value(uint32_t dv_ind, gpu_status_t *gpu)
-{
-	const char *status_string;
-	uint64_t curr_milli_watts;
-	rsmi_status_t rsmi_rc = rsmi_dev_power_ave_get(
-		dv_ind, 0, &curr_milli_watts);
-
-	if (rsmi_rc != RSMI_STATUS_SUCCESS) {
-		rsmi_rc = rsmi_status_string(rsmi_rc, &status_string);
-		error("RSMI: Failed to get power: %s", status_string);
-		gpu->energy.current_watts = NO_VAL;
-		return SLURM_ERROR;
-	}
-
-	gpu->last_update_watt = curr_milli_watts/1000000;
-	gpu->previous_update_time = gpu->last_update_time;
-	gpu->last_update_time = time(NULL);
-
-	return SLURM_SUCCESS;
-}
-
-/*
  * _get_additional_consumption computes consumption between 2 times
  * time0	(IN) Previous time
  * time1	(IN) Current time
@@ -261,7 +218,7 @@ static void _update_energy(gpu_status_t *gpu, uint32_t readings)
 }
 
 /*
- * _thread_update_node_energy calls _read_rsmi_values and updates all values
+ * _thread_update_node_energy calls _read_gpu_values and updates all values
  * for node consumption
  */
 static int _thread_update_node_energy(void)
@@ -271,7 +228,7 @@ static int _thread_update_node_energy(void)
 	static uint32_t readings = 0;
 
 	for (i = 0; i < gpus_len; i++) {
-		rc = _read_rsmi_value(i, &gpus[i]);
+		rc = gpu_g_energy_read(i, &gpus[i]);
 		if (rc == SLURM_SUCCESS) {
 			_update_energy(&gpus[i], readings);
 		}
@@ -280,7 +237,7 @@ static int _thread_update_node_energy(void)
 
 	if (slurm_conf.debug_flags & DEBUG_FLAG_ENERGY) {
 		for (i = 0; i < gpus_len; i++)
-			info("rsmi-thread: gpu %u current_watts: %u, consumed %"PRIu64" Joules %"PRIu64" new, ave watts %u",
+			info("gpu-thread: gpu %u current_watts: %u, consumed %"PRIu64" Joules %"PRIu64" new, ave watts %u",
 			     i,
 			     gpus[i].energy.current_watts,
 			     gpus[i].energy.consumed_energy,
@@ -291,24 +248,8 @@ static int _thread_update_node_energy(void)
 	return rc;
 }
 
-/* Get the total # of GPUs in the system
- *
- * device_count	(OUT) Number of available GPU devices
- */
-static void _rsmi_get_device_count(unsigned int *device_count)
-{
-	const char *status_string;
-	rsmi_status_t rsmi_rc = rsmi_num_monitor_devices(device_count);
-
-	if (rsmi_rc != RSMI_STATUS_SUCCESS) {
-		rsmi_rc = rsmi_status_string(rsmi_rc, &status_string);
-		error("RSMI: Failed to get device count: %s", status_string);
-		*device_count = 0;
-	}
-}
-
 /*
- * _thread_init initializes values and conf for the rsmi thread
+ * _thread_init initializes values and conf for the gpu thread
  */
 static int _thread_init(void)
 {
@@ -323,24 +264,24 @@ static int _thread_init(void)
 }
 
 /*
- * _thread_rsmi_run is the thread calling rsmi periodically
+ * _thread_gpu_run is the thread calling gpu periodically
  * and read the energy values from the AMD GPUs
  */
-static void *_thread_rsmi_run(void *no_data)
+static void *_thread_gpu_run(void *no_data)
 {
 	struct timeval tvnow;
 	struct timespec abs;
 
 	flag_energy_accounting_shutdown = false;
-	log_flag(ENERGY, "rsmi-thread: launched");
+	log_flag(ENERGY, "gpu-thread: launched");
 
 	(void) pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 	(void) pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
-	slurm_mutex_lock(&rsmi_mutex);
+	slurm_mutex_lock(&gpu_mutex);
 	if (_thread_init() != SLURM_SUCCESS) {
-		log_flag(ENERGY, "rsmi-thread: aborted");
-		slurm_mutex_unlock(&rsmi_mutex);
+		log_flag(ENERGY, "gpu-thread: aborted");
+		slurm_mutex_unlock(&gpu_mutex);
 
 		slurm_mutex_lock(&launch_mutex);
 		slurm_cond_signal(&launch_cond);
@@ -351,7 +292,7 @@ static void *_thread_rsmi_run(void *no_data)
 
 	(void) pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
 
-	slurm_mutex_unlock(&rsmi_mutex);
+	slurm_mutex_unlock(&gpu_mutex);
 	flag_thread_started = true;
 
 	slurm_mutex_lock(&launch_mutex);
@@ -365,35 +306,35 @@ static void *_thread_rsmi_run(void *no_data)
 
 	//loop until slurm stop
 	while (!flag_energy_accounting_shutdown) {
-		slurm_mutex_lock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
 
 		_thread_update_node_energy();
 
 		/* Sleep until the next time. */
-		abs.tv_sec += DEFAULT_RSMI_FREQ;
-		slurm_cond_timedwait(&rsmi_cond, &rsmi_mutex, &abs);
+		abs.tv_sec += DEFAULT_GPU_FREQ;
+		slurm_cond_timedwait(&gpu_cond, &gpu_mutex, &abs);
 
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 	}
 
-	log_flag(ENERGY, "rsmi-thread: ended");
+	log_flag(ENERGY, "gpu-thread: ended");
 
 	return NULL;
 }
 
 /*
- * _thread_launcher is the thread that launches rsmi thread
+ * _thread_launcher is the thread that launches gpu thread
  */
 static void *_thread_launcher(void *no_data)
 {
 	struct timeval tvnow;
 	struct timespec abs;
 
-	slurm_thread_create(&thread_rsmi_id_run, _thread_rsmi_run, NULL);
+	slurm_thread_create(&thread_gpu_id_run, _thread_gpu_run, NULL);
 
 	/* setup timer */
 	gettimeofday(&tvnow, NULL);
-	abs.tv_sec = tvnow.tv_sec + DEFAULT_RSMI_TIMEOUT;
+	abs.tv_sec = tvnow.tv_sec + DEFAULT_GPU_TIMEOUT;
 	abs.tv_nsec = tvnow.tv_usec * 1000;
 
 	slurm_mutex_lock(&launch_mutex);
@@ -407,16 +348,16 @@ static void *_thread_launcher(void *no_data)
 		flag_energy_accounting_shutdown = true;
 
 		/*
-		 * It is a known thing we can hang up on RSMI calls cancel if
+		 * It is a known thing we can hang up on GPU calls cancel if
 		 * we must.
 		 */
-		pthread_cancel(thread_rsmi_id_run);
+		pthread_cancel(thread_gpu_id_run);
 
 		/*
 		 * Unlock just to make sure since we could have canceled the
 		 * thread while in the lock.
 		 */
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 	}
 
 	return NULL;
@@ -458,6 +399,13 @@ static void _get_node_energy_up(acct_gather_energy_t *energy)
 	bool cgroups_active = false;
 
 	uint16_t i;
+
+	/*
+	 * If saved_usable_gpus doesn't exist it means we don't have any gpus to
+	 * track, just return.
+	 */
+	if (!saved_usable_gpus)
+		return;
 
 	// Check if GPUs are constrained by cgroups
 	cgroup_conf_init();
@@ -587,14 +535,9 @@ static int _get_joules_task(uint16_t delta)
  */
 extern int init(void)
 {
-	if (!dlopen("librocm_smi64.so", RTLD_NOW | RTLD_GLOBAL))
-		fatal("RSMI configured, but wasn't found.");
-
 	/* put anything that requires the .conf being read in
 	   acct_gather_energy_p_conf_parse
 	*/
-
-	rsmi_init(0);
 
 	return SLURM_SUCCESS;
 }
@@ -614,22 +557,21 @@ extern int fini(void)
 	slurm_cond_signal(&launch_cond);
 	slurm_mutex_unlock(&launch_mutex);
 
-	if (thread_rsmi_id_launcher)
-		pthread_join(thread_rsmi_id_launcher, NULL);
+	if (thread_gpu_id_launcher)
+		pthread_join(thread_gpu_id_launcher, NULL);
 
-	slurm_mutex_lock(&rsmi_mutex);
+	slurm_mutex_lock(&gpu_mutex);
 	/* clean up the run thread */
-	slurm_cond_signal(&rsmi_cond);
-	slurm_mutex_unlock(&rsmi_mutex);
+	slurm_cond_signal(&gpu_cond);
+	slurm_mutex_unlock(&gpu_mutex);
 
-	if (thread_rsmi_id_run)
-		pthread_join(thread_rsmi_id_run, NULL);
+	if (thread_gpu_id_run)
+		pthread_join(thread_gpu_id_run, NULL);
 
 	xfree(gpus);
 	xfree(start_current_energies);
-	FREE_NULL_BITMAP(saved_usable_gpus);
+	saved_usable_gpus = NULL;
 
-	rsmi_shut_down();
 	return SLURM_SUCCESS;
 }
 
@@ -651,10 +593,9 @@ extern int acct_gather_energy_p_get_data(enum acct_energy_type data_type,
 	uint16_t *gpu_cnt = (uint16_t *)data;
 
 	xassert(running_in_slurmd_stepd());
-
 	switch (data_type) {
 	case ENERGY_DATA_NODE_ENERGY_UP:
-		slurm_mutex_lock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
 		if (running_in_slurmd()) {
 			if (_thread_init() == SLURM_SUCCESS) {
 				_thread_update_node_energy();
@@ -664,32 +605,35 @@ extern int acct_gather_energy_p_get_data(enum acct_energy_type data_type,
 			_get_joules_task(10);
 			_get_node_energy_up(energy);
 		}
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 		break;
 	case ENERGY_DATA_NODE_ENERGY:
-		slurm_mutex_lock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
 		_get_node_energy(energy);
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 		break;
 	case ENERGY_DATA_LAST_POLL:
-		slurm_mutex_lock(&rsmi_mutex);
-		*last_poll = gpus[gpus_len-1].last_update_time;
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
+		if (gpus)
+			*last_poll = gpus[gpus_len-1].last_update_time;
+		else
+			*last_poll = 0;
+		slurm_mutex_unlock(&gpu_mutex);
 		break;
 	case ENERGY_DATA_SENSOR_CNT:
-		slurm_mutex_lock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
 		*gpu_cnt = gpus_len;
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 		break;
 	case ENERGY_DATA_STRUCT:
-		slurm_mutex_lock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
 		for (i = 0; i < gpus_len; i++)
 			memcpy(&energy[i], &gpus[i].energy,
 			       sizeof(acct_gather_energy_t));
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 		break;
 	case ENERGY_DATA_JOULES_TASK:
-		slurm_mutex_lock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
 		if (running_in_slurmd()) {
 			if (_thread_init() == SLURM_SUCCESS)
 				_thread_update_node_energy();
@@ -699,7 +643,7 @@ extern int acct_gather_energy_p_get_data(enum acct_energy_type data_type,
 		for (i = 0; i < gpus_len; ++i)
 			memcpy(&energy[i], &gpus[i].energy,
 			       sizeof(acct_gather_energy_t));
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 		break;
 	default:
 		error("%s: unknown enum %d",
@@ -722,33 +666,36 @@ extern int acct_gather_energy_p_set_data(enum acct_energy_type data_type,
 	case ENERGY_DATA_RECONFIG:
 		break;
 	case ENERGY_DATA_PROFILE:
-		slurm_mutex_lock(&rsmi_mutex);
+		slurm_mutex_lock(&gpu_mutex);
 		_get_joules_task(*delta);
 		_send_profile();
-		slurm_mutex_unlock(&rsmi_mutex);
+		slurm_mutex_unlock(&gpu_mutex);
 		break;
 	case ENERGY_DATA_STEP_PTR:
 	{
-		bitstr_t *usable_gpus = NULL;
-
 		/* set global job if needed later */
 		job = (stepd_step_rec_t *)data;
 
+		/*
+		 * Get the GPUs used in the step so we only poll those when
+		 * looking at them
+		 */
 		rc = gres_get_step_info(job->step_gres_list, "gpu", 0,
 					GRES_STEP_DATA_BITMAP,
-					&usable_gpus);
-		if (rc == SLURM_SUCCESS) {
-			/*
-			 * Save a copy of the GPUs affected, so we can
-			 * reset things afterwards
-			 */
-			FREE_NULL_BITMAP(saved_usable_gpus);
-			saved_usable_gpus = usable_gpus;
-			usable_gpus = NULL;
-		}
-		log_flag(ENERGY, "usable_gpus = %d of %ld",
-			 bit_set_count(saved_usable_gpus),
-			 bit_size(saved_usable_gpus));
+					&saved_usable_gpus);
+		/*
+		 * If a step isn't using gpus it will return ESLURM_INVALID_GRES
+		 * not a real error, so we only print out debug2.
+		 */
+		if (rc == SLURM_SUCCESS)
+			log_flag(ENERGY, "usable_gpus = %d of %ld",
+				 bit_set_count(saved_usable_gpus),
+				 bit_size(saved_usable_gpus));
+		else if (rc == ESLURM_INVALID_GRES)
+			debug2("Step most likely doesn't have any gpus, no power gathering");
+		else
+			error("gres_get_step_info returned: %s",
+			      slurm_strerror(rc));
 		break;
 	}
 	default:
@@ -779,10 +726,10 @@ extern void acct_gather_energy_p_conf_set(int context_id_in,
 	if (!flag_init) {
 		flag_init = true;
 		if (running_in_slurmd()) {
-			_rsmi_get_device_count((unsigned int *)&gpus_len);
+			gpu_g_get_device_count((unsigned int *)&gpus_len);
 			if (gpus_len) {
 				gpus = xcalloc(sizeof(gpu_status_t), gpus_len);
-				slurm_thread_create(&thread_rsmi_id_launcher,
+				slurm_thread_create(&thread_gpu_id_launcher,
 						    _thread_launcher, NULL);
 			}
 			log_flag(ENERGY, "%s thread launched", plugin_name);

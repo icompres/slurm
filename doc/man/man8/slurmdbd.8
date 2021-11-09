@@ -26,6 +26,11 @@ Reset the lft and rgt values of the associations in the given cluster list.
 Lft and rgt values are used to distinguish hierarchical groups in the slurm
 accounting database.  This option should be very rarely used.
 .TP
+\fB\-s\fR
+Change working directory of slurmdbd to LogFile path if possible, or to /var/tmp
+otherwise.
+
+.TP
 \fB\-v\fR
 Verbose operation. Multiple \fB\-v\fR's increase verbosity.
 .TP
@@ -45,11 +50,11 @@ have write permission for SlurmUser, no core file will be produced.
 .SH "SIGNALS"
 .TP
 \fBSIGTERM SIGINT\fR
-\fBslurmdbd\fR will shutdown cleanly, waiting for in-progress rollups to
+\fBslurmdbd\fR will shutdown cleanly, waiting for in\-progress rollups to
 finish.
 .TP
 \fBSIGABRT\fR
-\fBslurmdbd\fR will perform a core dump, then exit.  In-progress operations
+\fBslurmdbd\fR will perform a core dump, then exit.  In\-progress operations
 are killed.
 .TP
 \fBSIGHUP\fR

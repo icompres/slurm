@@ -173,6 +173,7 @@ typedef struct {
 	bool bind_gpu; /* If we are binding to a gpu or not. */
 	bool bind_nic; /* If we are binding to a nic or not. */
 	uint32_t gpus_per_task; /* How many gpus per task requested. */
+	gres_internal_flags_t gres_internal_flags;
 	char *map_gpu; /* GPU map requested. */
 	char *mask_gpu; /* GPU mask requested. */
 	char *request;
@@ -367,10 +368,12 @@ extern int gres_find_job_by_key_with_cnt(void *x, void *key)
 
 	if (!gres_find_job_by_key(x, key))
 		return 0;
-	/* ignore count on no_consume gres */
+
+	/* This gres has been allocated on this node */
 	if (!gres_data_ptr->node_cnt ||
 	    gres_data_ptr->gres_cnt_node_alloc[job_key->node_offset])
 		return 1;
+
 	return 0;
 }
 
@@ -2152,8 +2155,8 @@ unpack_error:
 
 /*
  * Load this node's configuration (how many resources it has, topology, etc.)
- * IN cpu_cnt - Number of CPUs configured on this node
- * IN node_name - Name of this node
+ * IN cpu_cnt - Number of CPUs configured for node node_name.
+ * IN node_name - Name of the node to load the GRES config for.
  * IN gres_list - Node's GRES information as loaded from slurm.conf by slurmd
  * IN xcpuinfo_abs_to_mac - Pointer to xcpuinfo_abs_to_mac() funct. If
  *	specified, Slurm will convert gres_slurmd_conf->cpus_bitmap (a bitmap
@@ -2163,7 +2166,7 @@ unpack_error:
  * IN xcpuinfo_mac_to_abs - Pointer to xcpuinfo_mac_to_abs() funct. Used to
  *	convert CPU affinities from machine format (as collected from NVML and
  *	others) into abstract format, for sanity checking purposes.
- * NOTE: Called from slurmd and slurmstepd
+ * NOTE: Called from slurmd (and from slurmctld for each cloud node)
  */
 extern int gres_g_node_config_load(uint32_t cpu_cnt, char *node_name,
 				   List gres_list,
@@ -2183,9 +2186,11 @@ extern int gres_g_node_config_load(uint32_t cpu_cnt, char *node_name,
 	gres_slurmd_conf_t **gres_array;
 	char *gres_conf_file;
 	char *autodetect_string = NULL;
+	bool in_slurmd = running_in_slurmd();
 
 	node_config_load_t node_conf = {
 		.cpu_cnt = cpu_cnt,
+		.in_slurmd = in_slurmd,
 		.xcpuinfo_mac_to_abs = xcpuinfo_mac_to_abs
 	};
 
@@ -2230,6 +2235,14 @@ extern int gres_g_node_config_load(uint32_t cpu_cnt, char *node_name,
 			_handle_global_autodetect(autodetect_string);
 			xfree(autodetect_string);
 		}
+
+		/* AutoDetect cannot run on the slurmctld node */
+		if (running_in_slurmctld() &&
+		    autodetect_flags &&
+		    !((autodetect_flags & GRES_AUTODETECT_GPU_FLAGS) &
+		      GRES_AUTODETECT_GPU_OFF))
+			fatal("Cannot use AutoDetect on cloud node \"%s\"",
+			      gres_node_name);
 
 		if (s_p_get_array((void ***) &gres_array,
 				  &count, "Name", tbl)) {
@@ -2343,6 +2356,7 @@ extern int gres_node_config_unpack(buf_t *buffer, char *node_name)
 	char *tmp_type = NULL;
 	char *tmp_unique_id = NULL;
 	gres_slurmd_conf_t *p;
+	bool locked = false;
 
 	rc = gres_init();
 
@@ -2358,6 +2372,7 @@ extern int gres_node_config_unpack(buf_t *buffer, char *node_name)
 		goto unpack_error;
 
 	slurm_mutex_lock(&gres_context_lock);
+	locked = true;
 	if (protocol_version < SLURM_MIN_PROTOCOL_VERSION) {
 		error("%s: protocol_version %hu not supported",
 		      __func__, protocol_version);
@@ -2498,7 +2513,8 @@ unpack_error:
 	xfree(tmp_links);
 	xfree(tmp_name);
 	xfree(tmp_type);
-	slurm_mutex_unlock(&gres_context_lock);
+	if (locked)
+		slurm_mutex_unlock(&gres_context_lock);
 	return SLURM_ERROR;
 }
 
@@ -4070,6 +4086,7 @@ extern int gres_node_state_unpack(List *gres_list, buf_t *buffer,
 	uint16_t gres_bitmap_size = 0, rec_cnt = 0;
 	gres_state_t *gres_ptr;
 	gres_node_state_t *gres_node_ptr;
+	bool locked = false;
 
 	safe_unpack16(&rec_cnt, buffer);
 	if (rec_cnt == 0)
@@ -4078,6 +4095,7 @@ extern int gres_node_state_unpack(List *gres_list, buf_t *buffer,
 	rc = gres_init();
 
 	slurm_mutex_lock(&gres_context_lock);
+	locked = true;
 	if ((gres_context_cnt > 0) && (*gres_list == NULL))
 		*gres_list = list_create(_gres_node_list_delete);
 
@@ -4128,7 +4146,8 @@ extern int gres_node_state_unpack(List *gres_list, buf_t *buffer,
 
 unpack_error:
 	error("%s: unpack error from node %s", __func__, node_name);
-	slurm_mutex_unlock(&gres_context_lock);
+	if (locked)
+		slurm_mutex_unlock(&gres_context_lock);
 	return SLURM_ERROR;
 }
 
@@ -5215,7 +5234,7 @@ next:	if (*save_ptr[0] == '\0') {	/* Empty input token */
 
 fini:	if (rc != SLURM_SUCCESS) {
 		*save_ptr = NULL;
-		if (rc == ESLURM_INVALID_GRES) {
+		if ((rc == ESLURM_INVALID_GRES) && running_in_daemon()) {
 			info("%s: Invalid GRES job specification %s", __func__,
 			     in_val);
 		}
@@ -5305,7 +5324,7 @@ fini:	xfree(name);
 	xfree(type);
 	if (my_rc != SLURM_SUCCESS) {
 		prev_save_ptr = NULL;
-		if (my_rc == ESLURM_INVALID_GRES) {
+		if ((my_rc == ESLURM_INVALID_GRES) && running_in_daemon()) {
 			info("%s: Invalid GRES job specification %s", __func__,
 			     in_val);
 		}
@@ -5500,6 +5519,7 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 	overlap_check_t *over_list;
 	int over_count = 0, rc = SLURM_SUCCESS, size;
 	bool have_gres_gpu = false, have_gres_mps = false;
+	bool requested_gpu = false;
 	bool overlap_merge = false;
 	gres_state_t *gres_state;
 	gres_job_state_t *job_gres_data;
@@ -5582,6 +5602,9 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 		while ((job_gres_data = _get_next_job_gres(in_val, &cnt,
 							   *gres_list,
 							   &save_ptr, &rc))) {
+			if (!requested_gpu &&
+			    (!xstrcmp(job_gres_data->gres_name, "gpu")))
+				requested_gpu = true;
 			job_gres_data->gres_per_job = cnt;
 			in_val = NULL;
 			job_gres_data->total_gres =
@@ -5594,6 +5617,9 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 		while ((job_gres_data = _get_next_job_gres(in_val, &cnt,
 							   *gres_list,
 							   &save_ptr, &rc))) {
+			if (!requested_gpu &&
+			    (!xstrcmp(job_gres_data->gres_name, "gpu")))
+				requested_gpu = true;
 			job_gres_data->gres_per_node = cnt;
 			in_val = NULL;
 			if (*min_nodes != NO_VAL)
@@ -5608,6 +5634,9 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 		while ((job_gres_data = _get_next_job_gres(in_val, &cnt,
 							   *gres_list,
 							   &save_ptr, &rc))) {
+			if (!requested_gpu &&
+			    (!xstrcmp(job_gres_data->gres_name, "gpu")))
+				requested_gpu = true;
 			job_gres_data->gres_per_socket = cnt;
 			in_val = NULL;
 			if ((*min_nodes != NO_VAL) &&
@@ -5628,6 +5657,9 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 		while ((job_gres_data = _get_next_job_gres(in_val, &cnt,
 							   *gres_list,
 							   &save_ptr, &rc))) {
+			if (!requested_gpu &&
+			    (!xstrcmp(job_gres_data->gres_name, "gpu")))
+				requested_gpu = true;
 			job_gres_data->gres_per_task = cnt;
 			in_val = NULL;
 			if (*num_tasks != NO_VAL)
@@ -5652,14 +5684,16 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 	if (!ntasks_per_tres || !*ntasks_per_tres ||
 	    (*ntasks_per_tres == NO_VAL16)) {
 		/* do nothing */
-	} else if (list_count(*gres_list) != 0) {
+	} else if (requested_gpu && list_count(*gres_list)) {
 		/* Set num_tasks = gpus * ntasks/gpu */
 		uint64_t gpus = _get_job_gres_list_cnt(*gres_list, "gpu", NULL);
 		if (gpus != NO_VAL64)
 			*num_tasks = gpus * *ntasks_per_tres;
-		else
+		else {
 			error("%s: Can't set num_tasks = gpus * *ntasks_per_tres because there are no allocated GPUs",
 			      __func__);
+			rc = ESLURM_INVALID_GRES;
+		}
 	} else if (*num_tasks && (*num_tasks != NO_VAL)) {
 		/*
 		 * If job_gres_list empty, and ntasks_per_tres is specified,
@@ -5684,10 +5718,13 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 		if (list_count(*gres_list) == 0)
 			error("%s: Failed to add generated GRES %s (via ntasks_per_tres) to gres_list",
 			      __func__, gres);
+		else
+			requested_gpu = true;
 		xfree(gres);
 	} else {
 		error("%s: --ntasks-per-tres needs either a GRES GPU specification or a node/ntask specification",
 		      __func__);
+		rc = ESLURM_INVALID_GRES;
 	}
 
 	slurm_mutex_unlock(&gres_context_lock);
@@ -5698,6 +5735,21 @@ extern int gres_job_state_validate(char *cpus_per_tres,
 	if (size == 0) {
 		FREE_NULL_LIST(*gres_list);
 		return rc;
+	}
+
+	if (mem_per_tres && (!requested_gpu)) {
+		/*
+		 * If someone requested mem_per_tres but didn't request any
+		 * GPUs (even if --exclusive was used), then error.
+		 * For now we only test for GPUs since --mem-per-gpu is the
+		 * only allowed mem_per_gres option.
+		 * Even though --exclusive means that you will be allocated all
+		 * of the GRES on the node, we still require that GPUs are
+		 * explicitly requested when --mem-per-gpu is used.
+		 */
+		error("Requested mem_per_tres=%s but did not request any GPU.",
+		      mem_per_tres);
+		return ESLURM_INVALID_GRES;
 	}
 
 	/*
@@ -6233,6 +6285,7 @@ extern int gres_job_state_unpack(List *gres_list, buf_t *buffer,
 	uint8_t  has_more = 0;
 	gres_state_t *gres_ptr;
 	gres_job_state_t *gres_job_ptr = NULL;
+	bool locked = false;
 
 	safe_unpack16(&rec_cnt, buffer);
 	if (rec_cnt == 0)
@@ -6241,6 +6294,7 @@ extern int gres_job_state_unpack(List *gres_list, buf_t *buffer,
 	rc = gres_init();
 
 	slurm_mutex_lock(&gres_context_lock);
+	locked = true;
 	if ((gres_context_cnt > 0) && (*gres_list == NULL)) {
 		*gres_list = list_create(gres_job_list_delete);
 	}
@@ -6349,7 +6403,8 @@ unpack_error:
 	error("%s: unpack error from job %u", __func__, job_id);
 	if (gres_job_ptr)
 		_job_state_delete(gres_job_ptr);
-	slurm_mutex_unlock(&gres_context_lock);
+	if (locked)
+		slurm_mutex_unlock(&gres_context_lock);
 	return SLURM_ERROR;
 }
 
@@ -6449,6 +6504,7 @@ extern int gres_job_alloc_unpack(List *gres_list, buf_t *buffer,
 	uint16_t rec_cnt = 0;
 	uint8_t filled = 0;
 	gres_epilog_info_t *gres_job_ptr = NULL;
+	bool locked = false;
 
 	safe_unpack16(&rec_cnt, buffer);
 	if (rec_cnt == 0)
@@ -6457,6 +6513,7 @@ extern int gres_job_alloc_unpack(List *gres_list, buf_t *buffer,
 	rc = gres_init();
 
 	slurm_mutex_lock(&gres_context_lock);
+	locked = true;
 	if ((gres_context_cnt > 0) && (*gres_list == NULL)) {
 		*gres_list = list_create(_epilog_list_del);
 	}
@@ -6523,7 +6580,8 @@ unpack_error:
 	error("%s: unpack error", __func__);
 	if (gres_job_ptr)
 		_epilog_list_del(gres_job_ptr);
-	slurm_mutex_unlock(&gres_context_lock);
+	if (locked)
+		slurm_mutex_unlock(&gres_context_lock);
 	return SLURM_ERROR;
 }
 
@@ -7871,7 +7929,7 @@ static void _job_state_log(void *gres_data, uint32_t job_id, uint32_t plugin_id)
 	if (gres_ptr->total_gres)
 		info("  total_gres:%"PRIu64, gres_ptr->total_gres);
 	if (gres_ptr->node_cnt)
-		info("  node_cnt:%"PRIu32, gres_ptr->node_cnt);
+		info("  node_cnt:%u", gres_ptr->node_cnt);
 	for (i = 0; i < gres_ptr->node_cnt; i++) {
 		if (gres_ptr->gres_cnt_node_alloc &&
 		    gres_ptr->gres_cnt_node_alloc[i]) {
@@ -8961,6 +9019,7 @@ extern int gres_step_state_unpack(List *gres_list, buf_t *buffer,
 	uint8_t data_flag = 0;
 	gres_state_t *gres_ptr;
 	gres_step_state_t *gres_step_ptr = NULL;
+	bool locked = false;
 
 	safe_unpack16(&rec_cnt, buffer);
 	if (rec_cnt == 0)
@@ -8969,6 +9028,7 @@ extern int gres_step_state_unpack(List *gres_list, buf_t *buffer,
 	rc = gres_init();
 
 	slurm_mutex_lock(&gres_context_lock);
+	locked = true;
 	if ((gres_context_cnt > 0) && (*gres_list == NULL)) {
 		*gres_list = list_create(gres_step_list_delete);
 	}
@@ -9048,7 +9108,8 @@ unpack_error:
 	error("%s: unpack error from %ps", __func__, step_id);
 	if (gres_step_ptr)
 		_step_state_delete(gres_step_ptr);
-	slurm_mutex_unlock(&gres_context_lock);
+	if (locked)
+		slurm_mutex_unlock(&gres_context_lock);
 	return SLURM_ERROR;
 }
 
@@ -9368,7 +9429,7 @@ static bitstr_t *_get_usable_gres_map_or_mask(char *map_or_mask,
 
 	bitmap_size = bit_size(gres_bit_alloc);
 	min = (is_map ?  0 : 1);
-	max = (is_map ? bitmap_size : ~(-1 << bitmap_size));
+	max = (is_map ? bitmap_size - 1 : ~(-1 << bitmap_size));
 	while (usable_gres == NULL) {
 		tmp = xstrdup(map_or_mask);
 		tok = strtok_r(tmp, ",", &save_ptr);
@@ -9385,7 +9446,7 @@ static bitstr_t *_get_usable_gres_map_or_mask(char *map_or_mask,
 			    (local_proc_id <= (task_offset + task_mult - 1))) {
 				value = strtol(tok, NULL, 0);
 				usable_gres = bit_alloc(bitmap_size);
-				if ((value < min) || (value >= max)) {
+				if ((value < min) || (value > max)) {
 					error("Invalid --gpu-bind= value specified.");
 					xfree(tmp);
 					goto end;	/* Bad value */
@@ -9502,12 +9563,16 @@ static void _parse_tres_bind(uint16_t accel_bind_type, char *tres_bind_str,
 	xassert(tres_bind);
 	memset(tres_bind, 0, sizeof(tres_bind_t));
 
+	tres_bind->gres_internal_flags = GRES_INTERNAL_FLAG_NONE;
+
 	tres_bind->bind_gpu = accel_bind_type & ACCEL_BIND_CLOSEST_GPU;
 	tres_bind->bind_nic = accel_bind_type & ACCEL_BIND_CLOSEST_NIC;
 	if (!tres_bind->bind_gpu && (sep = xstrstr(tres_bind_str, "gpu:"))) {
 		sep += 4;
 		if (!xstrncasecmp(sep, "verbose,", 8)) {
 			sep += 8;
+			tres_bind->gres_internal_flags |=
+				GRES_INTERNAL_FLAG_VERBOSE;
 		}
 		if (!xstrncasecmp(sep, "single:", 7)) {
 			sep += 7;
@@ -9657,7 +9722,6 @@ extern void gres_g_task_set_env(char ***job_env_ptr, List step_gres_list,
 	ListIterator gres_iter;
 	gres_state_t *gres_ptr = NULL;
 	bitstr_t *usable_gres = NULL;
-	gres_internal_flags_t gres_internal_flags = GRES_INTERNAL_FLAG_NONE;
 	uint64_t gres_cnt = 0;
 	bitstr_t *gres_bit_alloc = NULL;
 	tres_bind_t tres_bind;
@@ -9689,7 +9753,7 @@ extern void gres_g_task_set_env(char ***job_env_ptr, List step_gres_list,
 		list_iterator_destroy(gres_iter);
 		(*(gres_ctx.ops.task_set_env))(job_env_ptr, gres_bit_alloc,
 					       gres_cnt, usable_gres,
-					       gres_internal_flags);
+					       tres_bind.gres_internal_flags);
 		gres_cnt = 0;
 		FREE_NULL_BITMAP(gres_bit_alloc);
 		FREE_NULL_BITMAP(usable_gres);
@@ -9847,7 +9911,9 @@ extern uint64_t gres_step_test(List step_gres_list, List job_gres_list,
 				    &foreach_gres_cnt);
 
 		if (foreach_gres_cnt.gres_cnt == INFINITE64) {
-			/* job lack resources required by the step */
+			log_flag(GRES, "%s: Job lacks GRES (%s:%s) required by the step",
+				 __func__, step_gres_ptr->gres_name,
+				 step_data_ptr->type_name);
 			core_cnt = 0;
 			break;
 		}

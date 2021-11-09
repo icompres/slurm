@@ -56,12 +56,6 @@
 
 #define MAX_THREAD_COUNT 100
 
-/*
- *  Maximum message size. Messages larger than this value (in bytes)
- *  will not be received.
- */
-#define MAX_MSG_SIZE     (16*1024*1024)
-
 typedef struct {
 	void *arg;
 	slurm_persist_conn_t *conn;
@@ -930,7 +924,7 @@ static buf_t *_slurm_persist_recv_msg(slurm_persist_conn_t *persist_conn,
 
 	if (persist_conn->fd < 0) {
 		if (!persist_conn->shutdown || *persist_conn->shutdown)
-			log_flag(NET, "%s: Invalid file descriptor fd:%d host:%s port:%"PRIu16,
+			log_flag(NET, "%s: Invalid file descriptor fd:%d host:%s port:%u",
 				 __func__, persist_conn->fd,
 				 persist_conn->rem_host,
 				 persist_conn->rem_port);
