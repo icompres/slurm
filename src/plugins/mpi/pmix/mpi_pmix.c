@@ -106,7 +106,7 @@ static void *_libpmix_open(void)
 	lib_plug = dlopen(full_path, RTLD_LAZY | RTLD_GLOBAL);
 	xfree(full_path);
 
-	info("pmi/pmix: PMIx library version %d loaded", pmixp_lib_get_version());
+	debug("pmi/pmix: PMIx library version %d loaded", pmixp_lib_get_version());
 
 	return lib_plug;
 }
